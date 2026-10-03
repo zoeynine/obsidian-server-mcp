@@ -1,5 +1,7 @@
 # Obsidian Server MCP
 
+[English](README.md) · [简体中文](README.zh-CN.md)
+
 A lightweight, general Obsidian Server MCP for filesystem and semantic access
 to a Vault without a running Obsidian Desktop application. Common tools follow
 the pinned Local REST 5.3.1 contract as closely as the filesystem backend permits.
