@@ -437,6 +437,86 @@ test("search_query transport errors are stable and do not disclose roots or stac
   assertDoesNotLeakRootOrStack(budgetPayload, harness.vault);
 });
 
+test("search_query accepts optional directory scope while tag_list retains its whole-Vault scan", async (t) => {
+  const harness = await createHarness(t);
+  await mkdir(path.join(harness.vault, "projects", "nested"), { recursive: true });
+  const bytes = Buffer.from("\ufeff#shared\r\n");
+  const allPaths = ["projects/direct.md", "projects/nested/deep.md", "root.md"];
+  for (const name of allPaths) await writeFile(path.join(harness.vault, name), bytes);
+  for (const [scope, paths] of [
+    [undefined, allPaths],
+    [{ directory: "projects", recursive: true }, allPaths.slice(0, 2)],
+    [{ directory: "projects", recursive: false }, allPaths.slice(0, 1)],
+  ] as const) {
+    const result = await harness.client.callTool({ name: SEARCH_QUERY_TOOL_NAME, arguments: {
+      query: { var: "path" }, maxFiles: paths.length, ...(scope === undefined ? {} : { scope }),
+    } });
+    assert.notEqual(result.isError, true);
+    assert.deepEqual(result.content, []);
+    assert.deepEqual(result.structuredContent, { results: paths.map(filename => ({
+      filename, result: filename, version: computeContentVersion(bytes),
+    })) });
+  }
+  const tags = await harness.client.callTool({ name: TAG_LIST_TOOL_NAME, arguments: {} });
+  assert.notEqual(tags.isError, true);
+  assert.deepEqual(tags.structuredContent, { tags: [{ name: "shared", count: 3 }] });
+});
+
+test("search_query advertises strict optional scope and rejects malformed scope before core", async (t) => {
+  let coreCalls = 0;
+  const unexpected = async (): Promise<never> => {
+    coreCalls++;
+    throw new Error("Invalid scope must not reach core");
+  };
+  const harness = await createHarness(t, { searchQuery: unexpected, tagList: unexpected });
+  const { tools } = await harness.client.listTools();
+  const search = tools.find(tool => tool.name === SEARCH_QUERY_TOOL_NAME)!;
+  const scopeSchema = search.inputSchema.properties?.["scope"] as {
+    additionalProperties: boolean; required: string[];
+  };
+  assert.equal(search.inputSchema.required?.includes("scope"), false);
+  assert.equal(scopeSchema.additionalProperties, false);
+  assert.deepEqual(scopeSchema.required, ["directory", "recursive"]);
+  assert.equal(tools.find(tool => tool.name === TAG_LIST_TOOL_NAME)!.inputSchema.properties?.["scope"], undefined);
+
+  for (const scope of [null, "projects", [], {}, { directory: "projects" }, { recursive: true },
+    { directory: 1, recursive: true }, { directory: "", recursive: "true" },
+    { directory: "", recursive: 1 }, { directory: "", recursive: false, includeAttachments: true },
+    { directory: "", recursive: true, extra: true }]) {
+    const result = await harness.client.callTool({ name: SEARCH_QUERY_TOOL_NAME,
+      arguments: { query: { var: "path" }, scope } });
+    assert.equal(result.isError, true);
+    assert.match(readTextBlock(result.content), /Input validation error/u);
+    assertDoesNotLeakRootOrStack(result, harness.vault);
+  }
+  const tagScope = await harness.client.callTool({ name: TAG_LIST_TOOL_NAME,
+    arguments: { scope: { directory: "", recursive: true } } });
+  assert.equal(tagScope.isError, true);
+  assert.match(readTextBlock(tagScope.content), /Input validation error/u);
+  assert.equal(coreCalls, 0);
+});
+
+test("search_query scope failures retain safe path and traversal error mapping", async (t) => {
+  const harness = await createHarness(t);
+  await writeFile(path.join(harness.vault, "note.md"), "note");
+  for (const [directory, code] of [
+    ["../outside", "vault_path.parent_traversal"],
+    ["/absolute", "vault_path.absolute_path"],
+    [".obsidian", "vault_path.protected_path"],
+    ["missing", "search_query.traversal_changed"],
+    ["note.md", "search_query.traversal_changed"],
+  ] as const) {
+    const result = await harness.client.callTool({ name: SEARCH_QUERY_TOOL_NAME,
+      arguments: { query: { var: "path" }, scope: { directory, recursive: true } } });
+    assert.equal(result.isError, true);
+    const payload = readTextPayload(result.content) as { error: { code: string } };
+    assert.equal(payload.error.code, code);
+    assert.deepEqual(result.structuredContent, payload);
+    assert.equal("results" in (result.structuredContent ?? {}), false);
+    assertDoesNotLeakRootOrStack(result, harness.vault);
+  }
+});
+
 test("search_query reports aggregate and per-note output overflow as a result budget", async (t) => {
   const harness = await createHarness(t);
   const source = "x".repeat(1024 * 1024);

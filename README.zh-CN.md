@@ -22,7 +22,7 @@
 - 列出、读取 Vault 文件与指定 heading / block / frontmatter；
 - 获取 document map，定位可精确读取或修改的结构节点；
 - 创建、覆盖、追加与结构化 patch Markdown；
-- 使用 JsonLogic 搜索 Markdown / path / tags / frontmatter / stat；
+- 使用 JsonLogic 搜索 Markdown / path / tags / frontmatter / stat，可通过可选 `scope` 限定目录并选择是否递归；
 - 查询指向指定文件、heading 或 block 的引用，并区分 confirmed / uncertain；
 - 列出 tags；
 - 读取图片预览与非 PDF 附件；

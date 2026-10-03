@@ -117,8 +117,10 @@ export function createVaultMcpServer(dependencies: VaultMcpServerDependencies): 
     z.object({ path: z.string(), maxBytes, maxHeadings: z.number().int().min(1).max(MAX_DOCUMENT_MAP_HEADINGS).optional() }).strict(),
     z.object({ path: z.string(), version, headings: headingTree, blocks: z.array(z.string()), frontmatterFields: z.array(z.string()) }).strict(),
     ({path, ...options}) => dependencies.getDocumentMap(path, defined(options) as GetVaultDocumentMapOptions), (error, args) => mapVaultDocumentMapToolError(error, args.path));
-  register(SEARCH_QUERY_TOOL_NAME, "Query Markdown with JsonLogic over path, content, tags, frontmatter and stat. Returns truthy values. Filters do not limit the scan; overflow errors, never truncation. No link graph.",
+  register(SEARCH_QUERY_TOOL_NAME, "Query Markdown with JsonLogic over path, content, tags, frontmatter and stat. Returns truthy values. Only scope limits the scan; query path/glob conditions only filter results. Overflow errors, never truncation. No link graph.",
     z.object({ ...scanShape, query: z.record(z.string(), z.json()),
+      scope: z.object({ directory: z.string(), recursive: z.boolean() }).strict().optional()
+        .describe('Optional scan scope; omit for a recursive whole-Vault scan. directory "" is root; recursive=false scans only direct child files.'),
       maxResults: z.number().int().min(1).max(MAX_SEARCH_QUERY_RESULTS).optional()
         .describe("Optional match cap, not truncation; omit for defaults.") }).strict(),
     z.object({ results: z.array(z.object({ filename: z.string(), version, result: z.json() }).strict()) }).strict(),

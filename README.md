@@ -263,27 +263,28 @@ Examples:
 | `frontmatter` | Parsed properties; use dot notation such as `frontmatter.status` |
 | `stat` | `ctime` and `mtime` in milliseconds, `size` in bytes |
 
+Optional `scope` limits the scan to a Vault-relative `directory` (`""` is the
+root). Both `directory` and `recursive` are required when scope is provided:
+`recursive: false` scans only direct child files; `true` includes subdirectories.
+Omitting scope keeps the recursive whole-Vault Markdown scan.
+
 Budget parameters on `search_query` and `tag_list` are optional. Normally omit
 them to use default limits; set them when you intentionally want custom hard
-limits. For example, find `needle` in files under `projects/`, choosing a limit
-of 50 matches:
+limits. For example, scan only `projects/` and its subdirectories for `needle`,
+choosing a limit of 50 matches:
 
 ```json
 {
-  "query": {
-    "and": [
-      {"glob": ["projects/*", {"var": "path"}]},
-      {"in": ["needle", {"var": "content"}]}
-    ]
-  },
+  "scope": {"directory": "projects", "recursive": true},
+  "query": {"in": ["needle", {"var": "content"}]},
   "maxResults": 50
 }
 ```
 
-Here `*` also matches nested directories. A path condition filters returned
-matches; it does not restrict which files the server reads. Each query scans
-eligible Markdown files across the Vault. `maxTotalBytes` limits those scanned
-bytes, not response size. Exceeding a scan or result limit returns an error
+Only `scope` limits which files the server scans. Query path/glob conditions
+filter returned matches without pruning the scan; glob `*` also matches nested
+directories. `maxTotalBytes` limits scanned bytes, not response size.
+Exceeding a scan or result limit returns an error
 instead of partial results. Each match contains `filename`, `version` and the
 query's truthy `result` value; this example returns `true`, not a text snippet.
 

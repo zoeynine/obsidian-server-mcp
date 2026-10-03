@@ -41,6 +41,8 @@ export const MAX_SEARCH_QUERY_DEPTH = 8;
 export const MAX_SEARCH_QUERY_STRING_LENGTH = 1_024;
 
 export interface SearchVaultQueryOptions {
+  /** Scan only this directory; omission retains the recursive whole-Vault scan. */
+  readonly scope?: { readonly directory: string; readonly recursive: boolean };
   /** Global count of all child filesystem entries observed during traversal. */
   readonly maxEntries?: number;
   /** Global count of regular `.md` files accepted for searching. */
@@ -285,6 +287,7 @@ export async function searchVaultQuery(
           }),
         );
       },
+      options.scope,
     );
 
     return Object.freeze(results);

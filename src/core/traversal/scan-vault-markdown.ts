@@ -100,7 +100,7 @@ interface TraversalState {
 }
 
 /**
- * Traverses and safely reads the regular Markdown files in a Vault once.
+ * Traverses and safely reads the regular Markdown files in a Vault scope once.
  *
  * Paths are visited in deterministic code-unit order. Symlinks and non-regular
  * entries are never followed. Callers own extraction semantics and supply the
@@ -112,8 +112,12 @@ export async function scanVaultMarkdownDocuments(
   limits: VaultMarkdownScanLimits,
   errors: VaultMarkdownScanErrorFactory,
   visit: VaultMarkdownDocumentVisitor,
+  scope: { readonly directory: string; readonly recursive: boolean } =
+    { directory: "", recursive: true },
 ): Promise<VaultMarkdownScanStats> {
-  const traversal = await collectVaultCandidates(sandbox, limits, errors);
+  const traversal = await collectVaultCandidates(sandbox, limits, errors, {
+    ...scope, includeAttachments: false,
+  });
   let bytesRead = 0;
   let filesScanned = 0;
 
