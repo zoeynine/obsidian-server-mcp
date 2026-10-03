@@ -1,0 +1,55 @@
+{
+  "name": "obsidian-server-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "description": "A thin server-side MCP for controlled operations on an Obsidian Vault.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "obsidian-server-mcp": "./dist/stdio-main.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md"
+  ],
+  "scripts": {
+    "clean": "node scripts/clean.mjs all",
+    "clean:build": "node scripts/clean.mjs build",
+    "clean:test": "node scripts/clean.mjs test",
+    "start": "node dist/stdio-main.js",
+    "typecheck": "tsc -p tsconfig.json",
+    "generate:help": "node scripts/generate-help.mjs",
+    "check:help": "node scripts/generate-help.mjs --check",
+    "build": "npm run generate:help && npm run clean:build && tsc -p tsconfig.build.json",
+    "test": "npm run clean:test && tsc -p tsconfig.test.json && node scripts/run-tests.mjs",
+    "check": "npm run check:help && npm run typecheck && npm test && npm run build"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "^2.0.0",
+    "@types/node": "^22.20.1",
+    "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "^2.0.0",
+    "glob-to-regexp": "0.4.1",
+    "json-logic-js": "2.0.5",
+    "markdown-patch": "2.0.0",
+    "mdast-util-from-markdown": "2.0.2",
+    "mime-types": "2.1.35",
+    "sharp": "0.35.5",
+    "yaml": "2.9.1",
+    "zod": "^4.4.3"
+  }
+}

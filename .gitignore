@@ -1,0 +1,15 @@
+node_modules/
+.npm-cache/
+dist/
+.test-dist/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+npm-debug.log*
+example-vault/
+.public-export/
+*.tgz
+*.log
+.DS_Store
+Thumbs.db
