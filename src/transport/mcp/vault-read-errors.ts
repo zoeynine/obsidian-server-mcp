@@ -3,6 +3,7 @@ import type { CallToolResult } from "@modelcontextprotocol/server";
 import {
   InvalidVaultDocumentEncodingError,
   InvalidVaultDocumentReadLimitError,
+  MAX_VAULT_DOCUMENT_BYTES,
   VaultDocumentNotRegularFileError,
   VaultDocumentReadError,
   VaultDocumentTooLargeError,
@@ -41,12 +42,21 @@ export interface KnownVaultReadToolErrorPayload {
 
 /** Maps core failures to stable MCP tool errors without exposing stacks or roots. */
 export function mapVaultReadToolError(error: unknown): CallToolResult {
-  const payload = toKnownVaultReadToolErrorPayload(error) ?? {
+  let payload: VaultReadToolErrorPayload = toKnownVaultReadToolErrorPayload(error) ?? {
     error: {
       code: "vault_read.internal_error" as const,
       message: "vault_read failed unexpectedly",
     },
   };
+
+  if (error instanceof VaultDocumentTooLargeError) {
+    const recovery = error.observedSizeBytes <= BigInt(MAX_VAULT_DOCUMENT_BYTES)
+      ? `retry with maxBytes >= observedSizeBytes (${error.observedSizeBytes}), up to ${MAX_VAULT_DOCUMENT_BYTES} bytes.`
+      : `observedSizeBytes (${error.observedSizeBytes}) exceeds the ${MAX_VAULT_DOCUMENT_BYTES}-byte maximum supported source size.`;
+    payload = { error: { ...payload.error,
+      message: `${error.message}. maxBytes limits the entire source file, not the selected target; ${recovery}`,
+    } };
+  }
 
   return {
     content: [{ type: "text", text: JSON.stringify(payload) }],

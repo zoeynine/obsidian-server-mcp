@@ -178,6 +178,10 @@ filesystem `stat`, and SHA-256 `version`. Targeted reads return
 `{path,version,result}`. `vault_get_document_map` returns the same version plus
 heading/block/property addresses, without returning the note body.
 
+`maxBytes` applies to the entire source document, not the selected target.
+Targeted reads still read and parse the full source and return its exact-byte
+`version`.
+
 To read one section, first call `vault_get_document_map({"path":"note.md"})`.
 For `## Setup` inside `# Guide`, pass the full ancestor path to `vault_read`:
 

@@ -58,6 +58,11 @@ test("help discovers topics and returns only the requested section without Vault
     const text = (result.structuredContent as { text: string }).text;
     assert.match(text, /^#{2,3} /u);
     assert.doesNotMatch(text, /obsidian-help:|# Obsidian Server MCP\n/u);
+    if (topic === "read") {
+      const prose = text.replace(/\s+/gu, " ");
+      assert.match(prose, /`maxBytes` applies to the entire source document, not the selected target/u);
+      assert.match(prose, /Targeted reads still read and parse the full source and return its exact-byte `version`/u);
+    }
     if (topic === "patch") {
       assert.match(text, /"scope": "markerAndContent"/u);
       assert.match(text, /"scope": "parent"/u);
