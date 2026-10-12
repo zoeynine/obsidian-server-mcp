@@ -1,7 +1,7 @@
 import { registerVaultBinaryTool, type VaultBinaryReadUseCase, type VaultBinaryLinkProvider } from "./vault-read-binary.js";
 import { McpServer, type CallToolResult } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
-import { EngineError } from "markdown-patch";
+import { EngineError, TargetNotFoundError } from "markdown-patch";
 import { VaultTextError } from "../../core/file/text-policy.js";
 import { VaultSemanticError } from "../../core/document/note-json.js";
 import { MAX_VAULT_DOCUMENT_BYTES } from "../../core/file/read-vault-document.js";
@@ -73,11 +73,13 @@ export interface VaultMcpServerDependencies {
   readonly createBinaryLink?: VaultBinaryLinkProvider;
 }
 
-function semanticError(error: unknown): CallToolResult | undefined {
+function semanticError(error: unknown, targetType?: unknown): CallToolResult | undefined {
   if (!(error instanceof VaultTextError || error instanceof VaultSemanticError || error instanceof EngineError)) return undefined;
   const code = error instanceof EngineError ? error.name : error.code;
-  const payload = { error: { code: "vault_semantic." + code,
-    message: error instanceof EngineError ? "Markdown operation failed: " + error.name : error.message } };
+  const message = error instanceof TargetNotFoundError && targetType === "heading"
+    ? 'Heading target or body block not found. Use the full heading path from the top level, e.g. ["Guide","Setup"], copying exact keys from vault_get_document_map. If within is set, also check its body-block index.'
+    : error instanceof EngineError ? "Markdown operation failed: " + error.name : error.message;
+  const payload = { error: { code: "vault_semantic." + code, message } };
   return { content: [{ type: "text", text: JSON.stringify(payload) }], structuredContent: payload, isError: true };
 }
 
@@ -94,7 +96,7 @@ export function createVaultMcpServer(dependencies: VaultMcpServerDependencies): 
         try {
           const result = await run(args as z.infer<z.ZodObject<I>>);
           return { content: [], structuredContent: result as CallToolResult["structuredContent"] };
-        } catch (error) { return semanticError(error) ?? mapError(error, args as z.infer<z.ZodObject<I>>); }
+        } catch (error) { return semanticError(error, (args as { targetType?: unknown }).targetType) ?? mapError(error, args as z.infer<z.ZodObject<I>>); }
       });
   }
   register(OBSIDIAN_HELP_TOOL_NAME, "Usage manual; omit topic for the topic index.",
@@ -158,6 +160,8 @@ export function createVaultMcpServer(dependencies: VaultMcpServerDependencies): 
           z.object({ before: headingAddress }).strict(), z.object({ after: headingAddress }).strict()]) }).strict().optional()
           .describe("Heading move only: operation=replace, scope=parent; omit content."),
         ifMatch: version, createTargetIfMissing: z.boolean().optional(), rejectIfContentPreexists: z.boolean().optional(),
+        allowSubtreeReplacement: z.boolean().optional()
+          .describe("Explicitly allow heading content/whole-section replace to remove child sections; ifMatch still applies."),
       }).strict(), mutationOutput,
       ({ path, ...instruction }) => mutations.patch(path, defined(instruction)),
       (error, args) => mapVaultMutationToolError(error, args.path), { destructive: true, idempotent: false });

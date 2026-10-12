@@ -425,6 +425,14 @@ When `vault_patch` targets a heading section, omit `within`. Heading markers in
 `content` are relative to the selected heading and scope, not absolute Markdown
 levels. `within` instead selects a body block for a block edit.
 
+A heading `replace` with `scope: "content"` (the default) or `markerAndContent`
+replaces its entire subtree. If child headings exist, it fails with
+`vault_semantic.subtree_confirmation_required` unless you explicitly set
+`allowSubtreeReplacement: true`. This confirmation still requires a fresh
+`ifMatch`. To edit one direct body block while keeping child sections, use
+`within: 0` for the first block (or its appropriate index); omit the confirmation.
+The flag applies only to these whole-section replacements, without `within`.
+
 | Scope and operation | Meaning of content starting with `#` |
 | --- | --- |
 | `content` (default), `replace` / `prepend` / `append` | A direct child of the selected heading |

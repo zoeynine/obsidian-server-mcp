@@ -1,4 +1,4 @@
-import { patch, InstructionInputSchema, type InstructionInput, type PatchResult } from "markdown-patch";
+import { buildModel, projectMap, patch, InstructionInputSchema, type InstructionInput, type PatchResult } from "markdown-patch";
 import { isMap, isScalar, stringify } from "yaml";
 import { isDeepStrictEqual } from "node:util";
 import type { VaultDocumentReadResult } from "../file/read-vault-document.js";
@@ -7,7 +7,10 @@ import { assertVersionMatch, computeContentVersion } from "../version/content-ve
 import { parseFrontmatter, requireJson, VaultSemanticError, withoutBom } from "../document/note-json.js";
 import { validateMarkdownSource } from "../parser/structured-markdown.js";
 
-export type VaultPatchInstruction = InstructionInput & { readonly ifMatch: string };
+export type VaultPatchInstruction = InstructionInput & {
+  readonly ifMatch: string;
+  readonly allowSubtreeReplacement?: boolean;
+};
 export const MAX_PATCH_INPUT_BYTES = 4 * 1024 * 1024;
 
 /** Pure preparation; commit must recheck the same exact-byte precondition. */
@@ -20,11 +23,15 @@ export function prepareVaultPatch(document: VaultDocumentReadResult, input: unkn
     throw new VaultSemanticError("if_match_required", "vault_patch requires ifMatch from the document version");
   }
   assertVersionMatch(computeContentVersion(document.content), input.ifMatch);
-  const allowed = new Set(["targetType", "target", "within", "operation", "scope", "content", "value", "destination", "ifMatch", "createTargetIfMissing", "rejectIfContentPreexists"]);
+  const allowed = new Set(["targetType", "target", "within", "operation", "scope", "content", "value", "destination", "ifMatch", "createTargetIfMissing", "rejectIfContentPreexists", "allowSubtreeReplacement"]);
   if (Object.keys(input).some(key => !allowed.has(key))) throw new VaultSemanticError("invalid_instruction", "Unknown patch instruction field");
-  let normalized: unknown = input;
-  if ("targetType" in input && input.targetType === "heading" && "target" in input && typeof input.target === "string") {
-    try { normalized = { ...input, target: JSON.parse(input.target) }; } catch { /* Schema below rejects bare strings. */ }
+  const { allowSubtreeReplacement = false, ...engineInput } = input as Record<string, unknown>;
+  if (typeof allowSubtreeReplacement !== "boolean") {
+    throw new VaultSemanticError("invalid_instruction", "allowSubtreeReplacement must be a boolean");
+  }
+  let normalized: unknown = engineInput;
+  if (engineInput["targetType"] === "heading" && typeof engineInput["target"] === "string") {
+    try { normalized = { ...engineInput, target: JSON.parse(engineInput["target"]) }; } catch { /* Schema below rejects bare strings. */ }
   }
   assertTextPath(document.path);
   assertTextContent(document.path, document.content);
@@ -34,12 +41,34 @@ export function prepareVaultPatch(document: VaultDocumentReadResult, input: unkn
   const instruction = fields as InstructionInput;
   const source = withoutBom(document.content);
   validateMarkdownSource(source);
+  protectHeadingSubtree(source, instruction, allowSubtreeReplacement);
   // Never use the engine's short decoded-text hash for filesystem concurrency.
   const output = instruction.targetType === "frontmatter"
     ? patchFrontmatterPreservingSource(source, instruction) : patch(source, instruction);
   const next = (source === document.content ? "" : "\uFEFF") + output.document;
   assertTextContent(document.path, next);
   return { document: next, warnings: output.warnings };
+}
+
+function protectHeadingSubtree(source: string, instruction: InstructionInput, allow: boolean): void {
+  const replacesSection = instruction.targetType === "heading" && instruction.operation === "replace" &&
+    (instruction.scope === undefined || instruction.scope === "content" || instruction.scope === "markerAndContent") &&
+    (!("within" in instruction) || instruction.within === undefined);
+  if (allow && !replacesSection) {
+    throw new VaultSemanticError("invalid_instruction", "allowSubtreeReplacement applies only to heading content or markerAndContent replace without within");
+  }
+  if (!replacesSection || allow || instruction.targetType !== "heading") return;
+  // The public map uses the engine's exact duplicate-heading addresses. Do not
+  // guess a target by its label or scan Markdown lines for apparent headings.
+  let children = projectMap(buildModel(source)).headings;
+  for (const key of instruction.target ?? []) {
+    if (!Object.hasOwn(children, key)) return; // Preserve engine not-found/create behavior.
+    children = children[key]!;
+  }
+  if (Object.keys(children).length > 0) {
+    throw new VaultSemanticError("subtree_confirmation_required",
+      "Heading replacement would remove child sections. To replace the whole subtree, set allowSubtreeReplacement: true with a fresh ifMatch. To edit one body block, use within instead.");
+  }
 }
 
 function patchFrontmatterPreservingSource(source: string, instruction: InstructionInput): PatchResult {
