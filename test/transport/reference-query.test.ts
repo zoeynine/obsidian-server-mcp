@@ -18,18 +18,18 @@ test("stock stdio executes the new reference tool against a disposable Vault", a
   const client = new Client({ name: "reference-stdio-test", version: "1.0.0" });
   t.after(async () => { await client.close(); });
   await client.connect(transport);
-  assert.equal((await client.listTools()).tools.length, 13);
+  assert.equal((await client.listTools()).tools.length, 14);
   const response = await client.callTool({ name: tool, arguments: args });
   assert.notEqual(response.isError, true);
   assert.equal((response.structuredContent as unknown as ReferenceQueryResult).matches[0]!.raw, "[[#Title]]");
 });
-test("reference query adds a strictly typed read-only tool alongside the unchanged twelve-tool baseline", async t => {
+test("reference query adds a strictly typed read-only tool alongside the thirteen-tool baseline", async t => {
   const old = await binaryClient(t);
   const current = await binaryClient(t, { referenceQuery: true });
   const before = (await old.client.listTools()).tools;
   const after = (await current.client.listTools()).tools;
-  assert.equal(before.length, 12);
-  assert.equal(after.length, 13);
+  assert.equal(before.length, 13);
+  assert.equal(after.length, 14);
   for (const entry of before) assert.deepEqual(after.find(item => item.name === entry.name), entry);
   const entry = after.find(item => item.name === tool)!;
   assert.deepEqual(entry.inputSchema.required, ["scope", "target"]);

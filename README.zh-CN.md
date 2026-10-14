@@ -17,11 +17,12 @@
 
 ## 能做什么
 
-当前公开 surface 共 **13 个 MCP 工具**，包括：
+当前公开 surface 共 **14 个 MCP 工具**，包括：
 
 - 列出、读取 Vault 文件与指定 heading / block / frontmatter；
 - 获取 document map，定位可精确读取或修改的结构节点；
 - 创建、覆盖、追加与结构化 patch Markdown；
+- 对已有文本文件做整文件范围内、唯一命中的精确字符串替换；
 - 使用 JsonLogic 搜索 Markdown / path / tags / frontmatter / stat，可通过可选 `scope` 限定目录并选择是否递归；
 - 查询指向指定文件、heading 或 block 的引用，并区分 confirmed / uncertain；
 - 列出 tags；
@@ -66,7 +67,7 @@ OBSIDIAN_VAULT_ROOT="$PWD/example-vault" node ./dist/stdio-main.js
 }
 ```
 
-连接后应能发现 **13 个工具**。第一次使用可以从：
+连接后应能发现 **14 个工具**。第一次使用可以从：
 
 ```text
 obsidian_help({"topic":"read"})
@@ -83,6 +84,9 @@ vault_read({"path":"Hello.md"})
 - MCP 不伪造 Obsidian Desktop 的 link graph。需要引用关系时使用有界的 `reference_query`。
 - 真正的读 / 写 / 删除权限由部署环境的 user / group / ACL / mount / container 权限决定。
 - 修改已有文件前应先取得最新 `version` 并作为 `ifMatch` 提交；冲突后重新读取和判断，不自动重试 mutation。
+- `vault_replace_text` 只接受 `path`、`oldText`、`newText`、`ifMatch` 四个必填字段。旧字符串必须非空且在整个文件中精确、区分大小写地唯一命中（重叠命中也计数）；新字符串为空表示删除，相同则拒绝。请从整文件 `vault_read` 返回的 `content` 原样截取旧文本，并使用同次读取的 `version`，不要把归一化后的 heading 读取结果当作原文。
+- 精确替换不经过 Markdown parser，但整文件 `vault_read` 仍会解析 frontmatter；它不构成坏 YAML 的恢复流程。两个替换字符串的 UTF-8 字节总量上限为 4 MiB，旧、新文件另受 store 文本预算约束；不做换行、BOM 或 Unicode 归一化，不提供范围、序号、全部替换、正则、模糊匹配或批处理选项。
+- 写入、追加、patch 和精确替换的回执含 `beforeSizeBytes` 与写后 `sizeBytes`，用 `created` 区分原本缺失和空文件；精确替换再返回 `replacementCount: 1`。这些回执不保证结构或编辑意图正确，必要时仍应检查保存后的内容或 document map。
 
 ## 开发与贡献
 

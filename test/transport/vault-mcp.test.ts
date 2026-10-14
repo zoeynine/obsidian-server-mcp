@@ -33,6 +33,7 @@ import {
   VAULT_WRITE_TOOL_NAME,
   VAULT_APPEND_TOOL_NAME,
   VAULT_PATCH_TOOL_NAME,
+  VAULT_REPLACE_TEXT_TOOL_NAME,
   VAULT_MOVE_TOOL_NAME,
   VAULT_DELETE_TOOL_NAME,
   type SearchQueryUseCase,
@@ -73,6 +74,9 @@ test("a read-only composition exposes five Vault read tools plus static help", a
     (tool) => tool.name === SEARCH_QUERY_TOOL_NAME,
   );
   assert.equal(searchQueryTool?.inputSchema.properties?.["maxTagsPerFile"], undefined);
+  await assert.rejects(harness.client.callTool({ name: VAULT_REPLACE_TEXT_TOOL_NAME,
+    arguments: { path: "note.md", oldText: "old", newText: "new", ifMatch: computeContentVersion("old") } }),
+  /Tool vault_replace_text not found/u);
 });
 
 test("tools/call vault_read returns content and exact-byte version", async (t) => {
@@ -815,11 +819,11 @@ test("all discovered tools have input/output schemas and reject unknown input fi
   }
 });
 
-test("mutation capability exposes ten Vault tools plus help with strict schemas and correct annotations", async t => {
+test("mutation capability exposes eleven Vault tools plus help with strict schemas and correct annotations", async t => {
   const harness = await createHarness(t, { enableMutations: true });
   const tools = (await harness.client.listTools()).tools;
-  assert.deepEqual(tools.map(t => t.name).sort(), ["obsidian_help", "search_query", "tag_list", "vault_append", "vault_delete", "vault_get_document_map", "vault_list", "vault_move", "vault_patch", "vault_read", "vault_write"]);
-  for (const name of [VAULT_WRITE_TOOL_NAME, VAULT_APPEND_TOOL_NAME, VAULT_PATCH_TOOL_NAME, VAULT_MOVE_TOOL_NAME, VAULT_DELETE_TOOL_NAME]) {
+  assert.deepEqual(tools.map(t => t.name).sort(), ["obsidian_help", "search_query", "tag_list", "vault_append", "vault_delete", "vault_get_document_map", "vault_list", "vault_move", "vault_patch", "vault_read", "vault_replace_text", "vault_write"]);
+  for (const name of [VAULT_WRITE_TOOL_NAME, VAULT_APPEND_TOOL_NAME, VAULT_PATCH_TOOL_NAME, VAULT_REPLACE_TEXT_TOOL_NAME, VAULT_MOVE_TOOL_NAME, VAULT_DELETE_TOOL_NAME]) {
     const tool = tools.find(t => t.name === name)!;
     assert.equal(tool.annotations?.readOnlyHint, false);
     assert.equal(tool.annotations?.idempotentHint, name === VAULT_WRITE_TOOL_NAME);
@@ -841,6 +845,8 @@ test("write, append and generic frontmatter patch use one structured compact com
   assert.ok(JSON.stringify(created.structuredContent).length < 500);
   const firstVersion = (created.structuredContent as {version: string}).version;
   assert.equal(firstVersion, computeContentVersion(source));
+  assert.deepEqual(created.structuredContent, { message: "OK", path: "folder/note.md", version: firstVersion,
+    beforeSizeBytes: 0, sizeBytes: Buffer.byteLength(source), created: true });
   const required = await harness.client.callTool({ name: VAULT_APPEND_TOOL_NAME, arguments: { path: "folder/note.md", content: "next" } });
   assert.equal(required.isError, true);
   assert.equal((required.structuredContent as {error: {code: string}}).error.code, "vault_mutation.if_match_required");
@@ -849,11 +855,16 @@ test("write, append and generic frontmatter patch use one structured compact com
   assert.deepEqual(appended.content, []);
   const secondVersion = (appended.structuredContent as {version: string}).version;
   assert.equal(secondVersion, computeContentVersion(source + "\nnext"));
+  assert.deepEqual(appended.structuredContent, { message: "OK", path: "folder/note.md", version: secondVersion,
+    beforeSizeBytes: Buffer.byteLength(source), sizeBytes: Buffer.byteLength(source + "\nnext"), created: false });
   const stale = await harness.client.callTool({ name: VAULT_APPEND_TOOL_NAME, arguments: { path: "folder/note.md", content: "twice", ifMatch: firstVersion } });
   assert.equal((stale.structuredContent as {error: {code: string}}).error.code, "vault_mutation.version_conflict");
   const patched = await harness.client.callTool({ name: VAULT_PATCH_TOOL_NAME, arguments: { path: "folder/note.md", targetType: "frontmatter", target: "status", operation: "replace", value: "done", ifMatch: secondVersion } });
   assert.notEqual(patched.isError, true, JSON.stringify(patched));
   assert.deepEqual(patched.content, []);
+  const saved = await readFile(path.join(harness.vault, "folder/note.md"), "utf8");
+  assert.deepEqual(patched.structuredContent, { message: "OK", path: "folder/note.md", version: computeContentVersion(saved),
+    beforeSizeBytes: Buffer.byteLength(source + "\nnext"), sizeBytes: Buffer.byteLength(saved), created: false });
   const read = await harness.client.callTool({ name: VAULT_READ_TOOL_NAME, arguments: { path: "folder/note.md", targetType: "frontmatter", target: "status" } });
   assert.equal((read.structuredContent as {result: unknown}).result, "done");
   assert.equal((read.structuredContent as {version: string}).version, (patched.structuredContent as {version: string}).version);

@@ -82,7 +82,7 @@ export { toNoteJson, VaultSemanticError, type NoteJson, type JsonValue } from ".
 export { prepareVaultPatch, type VaultPatchInstruction } from "./patch/prepare-vault-patch.js";
 export { VaultTextError, assertTextContent, assertTextPath } from "./file/text-policy.js";
 export { VaultMutationStore, VaultMutationError, type VaultMutationOptions,
-  type VaultMutationResult, type VaultMutationErrorCode } from "./mutation/vault-mutations.js";
+  type VaultMutationResult, type VaultTextReplacementResult, type VaultMutationErrorCode } from "./mutation/vault-mutations.js";
 export { nativeMutationIO, type MutationIO } from "./mutation/mutation-io.js";
 export { type VaultMoveOptions, type VaultMoveResult, type VaultDeleteOptions, type VaultDeleteResult } from "./mutation/file-operations.js";
 

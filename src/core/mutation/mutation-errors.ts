@@ -1,11 +1,12 @@
 export type VaultMutationErrorCode = "invalid_configuration" | "if_match_required" | "version_conflict" |
   "target_changed" | "unsafe_target" | "temporary_changed" | "cross_device" | "too_large" |
   "permission_denied" | "cleanup_failed" | "not_found" | "destination_exists" | "trash_unavailable" |
-  "source_cleanup_failed";
+  "source_cleanup_failed" | "invalid_replacement" | "text_not_found" | "ambiguous_text" | "no_change";
 
 export class VaultMutationError extends Error {
   constructor(readonly code: VaultMutationErrorCode, message: string,
-    readonly details: { readonly path?: string; readonly destination?: string } = {}, options?: ErrorOptions) {
+    readonly details: { readonly path?: string; readonly destination?: string;
+      readonly matchCount?: 0; readonly matchCountAtLeast?: 2 } = {}, options?: ErrorOptions) {
     super(message, options);
     this.name = "VaultMutationError";
   }

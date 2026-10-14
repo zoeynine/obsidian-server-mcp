@@ -4,8 +4,8 @@ MCP adapters validate protocol payloads and map results/errors. All filesystem,
 path, version, parser, patch and semantic behavior belongs to src/core.
 Transport code must never access node:fs directly.
 
-Stdio registers twelve Vault tools: vault_read_binary, vault_list, vault_read, vault_get_document_map,
-search_query, reference_query, tag_list, vault_write, vault_append, vault_patch, vault_move and
+Stdio registers thirteen Vault tools: vault_read_binary, vault_list, vault_read, vault_get_document_map,
+search_query, reference_query, tag_list, vault_write, vault_append, vault_patch, vault_replace_text, vault_move and
 vault_delete. Mutations go
 through the shared core store; an embedded read-only composition may omit it.
 No search_simple or specialized metadata tool is registered. Embedders opt into
@@ -38,7 +38,7 @@ Known errors have stable codes with short text and structured payloads;
 unexpected exceptions are sanitized. SDK input/protocol errors remain SDK errors.
 
 Core owns exact-byte ifMatch, per-path serialization, guarded sibling temporary
-files, final revalidation, atomic publication and cleanup. No append/patch retry,
+files, final revalidation, atomic publication and cleanup. No automatic mutation retry,
 per-write permissions hook, directory durability state or policy module exists.
 Deployment filesystem permissions determine read/write/delete access. Permission
 failures become safe tool errors without exposing host paths. Transport does not

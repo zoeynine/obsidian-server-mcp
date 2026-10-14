@@ -12,11 +12,11 @@ import { binaryClient, binaryFixture, pdfFixture } from "../helpers/binary-fixtu
 const tool = VAULT_READ_BINARY_TOOL_NAME;
 const validLink = () => ({ uri: "https://attachments.example.invalid/read?token=fixture", expiresAt: new Date(Date.now() + 60_000).toISOString() });
 
-test("binary tool discovery is compact, strictly typed and read-only alongside the existing eleven tools", async t => {
+test("binary tool discovery is compact, strictly typed and read-only alongside the existing twelve tools", async t => {
   let calls = 0;
   const { client } = await binaryClient(t, { readBinary: async () => { calls++; throw new Error("must not run"); } });
   const tools = (await client.listTools()).tools;
-  assert.equal(tools.length, 12);
+  assert.equal(tools.length, 13);
   const entry = tools.find(item => item.name === tool)!;
   assert.deepEqual(Object.keys(entry.inputSchema.properties ?? {}), ["path", "as"]);
   assert.equal(entry.annotations?.readOnlyHint, true);
@@ -247,7 +247,7 @@ test("stock stdio refuses all PDF modes while non-PDF bytes, links and previews 
   const client = new Client({ name: "binary-stdio-test", version: "1.0.0" });
   t.after(async () => { await client.close(); });
   await client.connect(transport);
-  assert.equal((await client.listTools()).tools.length, 13);
+  assert.equal((await client.listTools()).tools.length, 14);
   for (const options of [{}, { as: "auto" }, { as: "bytes" }, { as: "link" }] as const) {
     const rejected = await client.callTool({ name: tool, arguments: { path: "fixture.pdf", ...options } });
     assert.equal(rejected.isError, true);

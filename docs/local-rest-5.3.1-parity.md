@@ -14,15 +14,16 @@ Primary sources at that immutable commit:
 
 ## Public tool table
 
-This table covers ten text/discovery/mutation tools: five read tools and five
-mutations through the shared store. An embedded read-only composition
+This table covers eleven text/discovery/mutation tools: five read tools and six
+mutations through the shared store, including the `vault_replace_text` extension.
+An embedded read-only composition
 can omit the store. No metadata policy module or external staging setup is required.
 The additional `obsidian_help` tool serves static README topics only; it is a
 server documentation extension with no Vault access, outside this parity table.
 The `vault_read_binary` extension is documented in the README and
 [deployment integration guide](binary-read-integration.md); `reference_query`
 has its own [bounded reference contract](reference-query.md). Stock stdio exposes
-13 tools including these extensions and `obsidian_help`.
+14 tools including these extensions and `obsidian_help`.
 
 | Tool | Pinned Local REST contract | Filesystem implementation / deliberate boundary |
 | --- | --- | --- |
@@ -32,6 +33,7 @@ has its own [bounded reference contract](reference-query.md). Stock stdio expose
 | `vault_write` | `path`, text `content`; creates parents and unconditionally overwrites | Implemented through the shared commit layer. Existing files require `ifMatch`; no force bypass. Missing files reject a supplied token. |
 | `vault_append` | `path`, text `content`; creates missing file; existing content receives LF first unless it ends in LF | Implemented through the shared commit layer, including the existing-empty-file LF case. Existing files require `ifMatch`; no transparent retries. |
 | `vault_patch` | One generic instruction with operation, scope, target and one payload carrier | Generic preparation plus shared atomic commit, required exact-byte `ifMatch`, no retries. Frontmatter operation table below is covered by fixtures. Never a specialized metadata tool. |
+| `vault_replace_text` | No pinned counterpart; independent server extension | Exactly `path`, `oldText`, `newText`, `ifMatch`. Whole-file literal, case-sensitive replacement of a unique nonempty old string in an existing text file; shared atomic commit and text limits, no parser or automatic retry. |
 | `search_query` | JsonLogic evaluated against each Markdown NoteJson; retains the truthy result | Pinned engine, with filesystem-supported fields and safety limits. Core array of `{filename,result,version}`; MCP `{results:[...]}` avoids protocol-dependent root-array wrapping. |
 | `tag_list` | `{tags:[{name,count}]}`; names omit `#`, nested parents included | Same shape; shares parsed properties with NoteJson. Existing conservative inline lexer, deterministic case folding and per-file counts remain filesystem approximations of the Desktop cache. |
 | `vault_move` | `path`, `destination`, optional `allowOverwrite` (false); `{message:"OK",oldPath,newPath}`; Desktop link/history updates | Same names, normalization, filename-preserving directory suffix, parent creation, overwrite flag and result. Optional source `ifMatch`. Filesystem move only; no link/history updates and no refusal based on backlinks. Same-filesystem only; details below. |
@@ -40,6 +42,31 @@ has its own [bounded reference contract](reference-query.md). Stock stdio expose
 Binary reads and reference queries extend the surface without changing these
 text/mutation contracts. `search_simple` and Desktop/UI/event tools are not
 exposed by this server.
+
+## Exact text replacement extension
+
+`vault_replace_text` requires all four fields and rejects extra fields. It
+counts overlapping occurrences as separate matches. A missing match returns
+`vault_mutation.text_not_found` with `matchCount: 0`; multiple matches return
+`vault_mutation.ambiguous_text` with `matchCountAtLeast: 2`. The error does not
+expose source offsets or snippets. Expand the old string with surrounding
+original text until it identifies one location. An empty new string deletes
+the match; equal strings return `vault_mutation.no_change` without writing.
+Replacement text is literal, including `$&` and `$1`.
+
+The UTF-8 byte lengths of `oldText` and `newText` together must not exceed
+4 MiB. Old and resulting documents independently obey the store's configured
+text budget, default 4 MiB and hard maximum 64 MiB. Matching and replacement
+apply no BOM, newline or Unicode normalization; unmatched bytes are preserved.
+There is no target scope, occurrence index, replace-all, regular expression,
+fuzzy matching or batch input.
+
+The recommended source is an unchanged slice from a whole-file `vault_read`
+response's `content`, paired with that response's `version`. Targeted heading
+reads normalize levels and are not guaranteed to return an exact source slice.
+Replacement does not run the Markdown parser, but whole-file `vault_read`
+still parses frontmatter and may reject malformed or unsupported YAML. This
+extension does not establish a malformed-YAML recovery workflow.
 
 ## Targeted read table
 
@@ -164,7 +191,7 @@ on filesystems where those spellings identify distinct files.
 1. Lock by physical Vault root and NFC/case-folded relative path across stores
    in the same process. Different paths can progress independently.
 2. Safely read exact existing bytes and check SHA-256 `ifMatch`. Existing
-   write/append and every patch require it. Missing-file creation rejects a
+   write/append and every patch/exact replacement require it. Missing-file creation rejects a
    supplied token. Validate the new text and byte limit before filesystem edits.
 3. Create missing parent directories one checked component at a time. Write a
    complete, exclusively created `.obsidian-mcp-<random>.tmp` beside the target.
@@ -172,7 +199,7 @@ on filesystems where those spellings identify distinct files.
    ownership/mode/ACL preparation hooks or chown/chmod/setfacl calls.
 4. Fsync the temporary file, close it, and revalidate parent identities, complete
    path policy, temporary identity, target metadata and exact-byte version.
-   Detected changes abort; append/patch are never transparently retried.
+   Detected changes abort; mutations are never transparently retried.
 5. Existing targets use one native rename/replace. New targets use atomic
    same-filesystem hard-link publication plus temp-name cleanup: Node has no
    rename NOREPLACE flag, and a concurrent create must not be overwritten.
@@ -185,8 +212,13 @@ on filesystems where those spellings identify distinct files.
 The hidden temporary names are protected by the common path policy, including
 direct reads/mutations and list/query/tag discovery. A write failure before
 publication retains the original note. Success retains Local REST's
-`message: "OK"`, adding path, SHA-256 version, sizeBytes and created, plus any
-patch warnings. The note body is not echoed. If a new note was published but its
+`message: "OK"`, adding path, SHA-256 version, `beforeSizeBytes`, `sizeBytes`
+and `created`, plus any warnings. `beforeSizeBytes` measures the original file;
+`sizeBytes` measures the saved file. Both are UTF-8 byte counts. Missing and
+empty files both have `beforeSizeBytes: 0`; `created` distinguishes them.
+Exact replacement also returns `replacementCount: 1`. These fields do not
+verify Markdown structure or editing intent; there are no diffs, heading lists,
+target echoes or note bodies in the receipt. If a new note was published but its
 extra hidden hard-link name could not be removed, return success with
 `temporary_cleanup_failed`; do not misreport an unsaved append and invite retry.
 
@@ -194,7 +226,7 @@ There is no parent-directory fsync, durability-mode receipt, metadata-policy
 loader or separate staging-root requirement. One pre-publication file fsync is
 kept because it is a simple failure point before replacement; v1 does not claim
 crash-consistent directory durability. The default stdio entry needs only the
-Vault root and wires all five mutations through this store.
+Vault root and wires all six mutations through this store.
 
 ## Move and delete filesystem deltas
 

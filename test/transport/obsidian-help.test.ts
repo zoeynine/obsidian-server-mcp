@@ -1,11 +1,17 @@
 import * as assert from "node:assert/strict";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import * as path from "node:path";
 import test, { type TestContext } from "node:test";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { OBSIDIAN_HELP_TOOL_NAME } from "../../src/transport/mcp/server.js";
 import { serveVaultMcpStdio } from "../../src/transport/mcp/stdio.js";
 import { prepareVaultPatch } from "../../src/core/patch/prepare-vault-patch.js";
 import { computeContentVersion } from "../../src/core/version/content-version.js";
-import { parseVaultRelativePath } from "../../src/core/path/vault-path.js";
+import { parseVaultRelativePath, VaultPathSandbox } from "../../src/core/path/vault-path.js";
+import { readVaultDocument } from "../../src/core/file/read-vault-document.js";
+import { readVaultNote } from "../../src/core/document/read-vault-note.js";
+import { VaultMutationStore } from "../../src/core/mutation/vault-mutations.js";
 
 test("published patch examples execute against their stated note structure", async t => {
   const client = await createHelpClient(t);
@@ -32,6 +38,37 @@ test("published patch examples execute against their stated note structure", asy
   assert.equal(prepareVaultPatch({ path: parseVaultRelativePath("note.md"), content: existing, version,
     sizeBytes: Buffer.byteLength(existing), modifiedAtMs: 0 },
     { ...setProperty, ifMatch: version }).document, outputs[1]);
+});
+
+test("published exact replacement example uses a whole-file read and keeps replacement text literal", async t => {
+  const client = await createHelpClient(t);
+  const response = await client.callTool({ name: OBSIDIAN_HELP_TOOL_NAME, arguments: { topic: "write" } });
+  const text = (response.structuredContent as { text: string }).text;
+  const examples = [...text.matchAll(/```json\n([\s\S]*?)\n```/gu)].map(match => JSON.parse(match[1]!));
+  assert.equal(examples.length, 1);
+  const example = examples[0];
+  assert.deepEqual(Object.keys(example), ["path", "oldText", "newText", "ifMatch"]);
+  assert.equal(example.path, "note.md");
+  assert.equal(example.ifMatch, "<current version>");
+
+  const vault = await mkdtemp(path.join(tmpdir(), "obsidian-help-replace-"));
+  t.after(async () => { await rm(vault, { recursive: true, force: true }); });
+  const source = "# Root\n\n## A\nOld body.\n\n## B\nKeep me.\n";
+  await writeFile(path.join(vault, example.path), source);
+  const sandbox = await VaultPathSandbox.create(vault);
+  const store = await VaultMutationStore.create(sandbox);
+  const read = await readVaultNote(inputPath => readVaultDocument(sandbox, inputPath), example.path);
+  assert.ok("content" in read);
+  assert.equal(read.content.slice(read.content.indexOf(example.oldText),
+    read.content.indexOf(example.oldText) + example.oldText.length), example.oldText);
+  const receipt = await store.replaceText(example.path, example.oldText, example.newText, { ifMatch: read.version });
+  const expected = "# Root\n\n## A\nNew body. $& is literal.\n\n## B\nKeep me.\n";
+  assert.equal(await readFile(path.join(vault, example.path), "utf8"), expected);
+  assert.equal(receipt.beforeSizeBytes, Buffer.byteLength(source));
+  assert.equal(receipt.sizeBytes, Buffer.byteLength(expected));
+  assert.equal(receipt.version, computeContentVersion(expected));
+  assert.equal(receipt.created, false);
+  assert.equal(receipt.replacementCount, 1);
 });
 
 test("help discovers topics and returns only the requested section without Vault access", async t => {
@@ -62,12 +99,20 @@ test("help discovers topics and returns only the requested section without Vault
       const prose = text.replace(/\s+/gu, " ");
       assert.match(prose, /`maxBytes` applies to the entire source document, not the selected target/u);
       assert.match(prose, /Targeted reads still read and parse the full source and return its exact-byte `version`/u);
+      assert.match(prose, /targeted heading text is not guaranteed to be an exact source slice/u);
     }
     if (topic === "patch") {
       assert.match(text, /"scope": "markerAndContent"/u);
       assert.match(text, /"scope": "parent"/u);
       assert.match(text, /targeted|Targeted/u);
       assert.doesNotMatch(text, /Moving and deleting files|Searching notes/u);
+    }
+    if (topic === "write") {
+      const prose = text.replace(/\s+/gu, " ");
+      assert.match(prose, /counting overlapping occurrences/u);
+      assert.match(prose, /`matchCount: 0` or `matchCountAtLeast: 2`, without source offsets or snippets/u);
+      assert.match(prose, /whole-file read still parses frontmatter/u);
+      assert.match(prose, /compact signals do not confirm Markdown structure or editing intent/u);
     }
   }
 });

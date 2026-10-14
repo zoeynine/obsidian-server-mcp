@@ -19,6 +19,7 @@ import { mapVaultListToolError } from "./vault-list-errors.js";
 import { mapVaultReadToolError } from "./vault-read-errors.js";
 import { mapVaultMutationToolError } from "./vault-mutation-errors.js";
 import type { VaultMutationStore } from "../../core/mutation/vault-mutations.js";
+import { MAX_TEXT_REPLACEMENT_INPUT_BYTES } from "../../core/mutation/prepare-text-replacement.js";
 import { mapObsidianHelpError, readObsidianHelp } from "./obsidian-help.js";
 import { registerReferenceQuery, type ReferenceQueryUseCase } from "./reference-query.js";
 
@@ -33,6 +34,7 @@ export const VAULT_READ_TOOL_NAME = "vault_read";
 export const VAULT_WRITE_TOOL_NAME = "vault_write";
 export const VAULT_APPEND_TOOL_NAME = "vault_append";
 export const VAULT_PATCH_TOOL_NAME = "vault_patch";
+export const VAULT_REPLACE_TEXT_TOOL_NAME = "vault_replace_text";
 export const VAULT_MOVE_TOOL_NAME = "vault_move";
 export const VAULT_DELETE_TOOL_NAME = "vault_delete";
 
@@ -135,7 +137,7 @@ export function createVaultMcpServer(dependencies: VaultMcpServerDependencies): 
   const mutations = dependencies.mutations;
   if (mutations) {
     const mutationOutput = z.object({ message: z.literal("OK"), path: z.string(), version,
-      sizeBytes: z.number().int().nonnegative(), created: z.boolean(),
+      beforeSizeBytes: z.number().int().nonnegative(), sizeBytes: z.number().int().nonnegative(), created: z.boolean(),
       warnings: z.array(z.object({ code: z.enum(["heading-depth-overflow", "temporary_cleanup_failed"]), message: z.string() }).strict()).optional(),
     }).strict();
     const textInput = z.object({ path: z.string(), content: z.string().max(MAX_VAULT_DOCUMENT_BYTES), ifMatch: version.optional() }).strict();
@@ -147,6 +149,12 @@ export function createVaultMcpServer(dependencies: VaultMcpServerDependencies): 
       textInput, mutationOutput,
       ({ path, content, ifMatch }) => mutations.append(path, content, ifMatch === undefined ? {} : { ifMatch }),
       (error, args) => mapVaultMutationToolError(error, args.path), { destructive: false, idempotent: false });
+    register(VAULT_REPLACE_TEXT_TOOL_NAME, "Replace one unique, case-sensitive literal match in an existing UTF-8 file. Copy exact oldText and version from a whole-file vault_read; pass version as ifMatch. Empty newText deletes. No automatic retry.",
+      z.object({ path: z.string(), oldText: z.string().max(MAX_TEXT_REPLACEMENT_INPUT_BYTES),
+        newText: z.string().max(MAX_TEXT_REPLACEMENT_INPUT_BYTES), ifMatch: version }).strict(),
+      mutationOutput.extend({ replacementCount: z.literal(1) }).strict(),
+      ({ path, oldText, newText, ifMatch }) => mutations.replaceText(path, oldText, newText, { ifMatch }),
+      (error, args) => mapVaultMutationToolError(error, args.path), { destructive: true, idempotent: false });
     const headingAddress = z.array(z.string()).nullable();
     register(VAULT_PATCH_TOOL_NAME, "Patch a heading/block/property with exact-byte ifMatch from a read/map. Copy map keys unchanged. Heading content uses relative levels. No automatic retry.",
       z.object({ path: z.string(), targetType: z.enum(["heading", "block", "frontmatter"]),

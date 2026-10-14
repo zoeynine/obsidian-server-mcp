@@ -34,6 +34,7 @@ test("write checks exact-byte ifMatch and preserves BOM/CRLF versions", async t 
   const content = "\uFEFF# 中文\r\ntext\r\n";
   const created = await f.store.write("note.md", content);
   assert.equal(created.created, true);
+  assert.equal(created.beforeSizeBytes, 0);
   assert.equal(created.version, computeContentVersion(Buffer.from(content)));
   assert.equal(created.sizeBytes, Buffer.byteLength(content));
   assert.deepEqual(await readFile(path.join(f.vault, "note.md")), Buffer.from(content));
@@ -41,6 +42,8 @@ test("write checks exact-byte ifMatch and preserves BOM/CRLF versions", async t 
   await assert.rejects(f.store.write("note.md", "lost", { ifMatch: computeContentVersion(content.slice(1)) }), VersionConflictError);
   const written = await f.store.write("note.md", "new", { ifMatch: created.version });
   assert.equal(written.created, false);
+  assert.equal(written.beforeSizeBytes, Buffer.byteLength(content));
+  assert.equal(written.sizeBytes, Buffer.byteLength("new"));
   assert.equal(written.version, computeContentVersion("new"));
   await assert.rejects(f.store.write("gone.md", "lost", { ifMatch: created.version }), code("version_conflict"));
   assert.deepEqual(await readdir(f.vault), ["note.md"]);
@@ -55,6 +58,9 @@ test("append follows Local REST newline semantics for absent, empty, LF, CRLF an
     const expected = initial === undefined ? "二" : initial + (initial.endsWith("\n") ? "" : "\n") + "二";
     assert.equal(await readFile(path.join(f.vault, filename), "utf8"), expected);
     assert.equal(result.version, computeContentVersion(expected));
+    assert.equal(result.beforeSizeBytes, initial === undefined ? 0 : Buffer.byteLength(initial));
+    assert.equal(result.sizeBytes, Buffer.byteLength(expected));
+    assert.equal(result.created, initial === undefined);
   }
   await assert.rejects(f.store.append("append-1.md", "again"), code("if_match_required"));
 });
@@ -119,9 +125,13 @@ test("generic frontmatter and heading patch use the shared commit path", async t
   assert.ok(next.endsWith("# Title\r\nBody\r\n"));
   assert.ok(next.startsWith("\uFEFF---\r\n"));
   assert.equal(result.version, computeContentVersion(next));
+  assert.equal(result.beforeSizeBytes, Buffer.byteLength(original));
+  assert.equal(result.sizeBytes, Buffer.byteLength(next));
   await assert.rejects(f.store.patch("patch.md", { targetType: "frontmatter", target: "tags", operation: "delete", ifMatch: computeContentVersion(original) }), VersionConflictError);
   const heading = await f.store.patch("patch.md", { targetType: "heading", target: ["Title"], operation: "replace", scope: "marker", content: "Renamed", ifMatch: result.version });
   assert.equal(heading.version, computeContentVersion(await readFile(path.join(f.vault, "patch.md"))));
+  assert.equal(heading.beforeSizeBytes, Buffer.byteLength(next));
+  assert.equal(heading.sizeBytes, (await readFile(path.join(f.vault, "patch.md"))).length);
   assert.ok((await readFile(path.join(f.vault, "patch.md"), "utf8")).includes("# Renamed"));
   await assert.rejects(f.store.patch("patch.md", { targetType: "frontmatter", target: "tags", operation: "delete" }), code("if_match_required"));
 });
@@ -260,6 +270,8 @@ test("cleanup failures report an aborted write or a saved-note warning without r
       const saved = await f.store.write("note.md", "new");
       assert.equal(saved.message, "OK");
       assert.equal(saved.version, computeContentVersion("new"));
+      assert.equal(saved.beforeSizeBytes, 0);
+      assert.equal(saved.sizeBytes, Buffer.byteLength("new"));
       assert.equal(saved.warnings?.[0]?.code, "temporary_cleanup_failed");
       assert.equal(await readFile(path.join(f.vault, "note.md"), "utf8"), "new");
     }
@@ -277,6 +289,8 @@ test("a successful create with a leftover temporary hard link rejects mutation w
   const saved = await f.store.write("note.md", "saved");
   assert.equal(saved.message, "OK");
   assert.equal(saved.created, true);
+  assert.equal(saved.beforeSizeBytes, 0);
+  assert.equal(saved.sizeBytes, Buffer.byteLength("saved"));
   assert.equal(saved.version, computeContentVersion("saved"));
   assert.equal(saved.warnings?.[0]?.code, "temporary_cleanup_failed");
   const target = path.join(f.vault, "note.md");

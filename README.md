@@ -83,7 +83,7 @@ terminal's PATH, use the absolute Node executable as `command` (find it with
 Clients with form-based settings use the same command, argument and environment
 variable. Launch `node` directly so the MCP protocol has exclusive use of stdout.
 
-Reconnect the client and discover **13 tools**. First call
+Reconnect the client and discover **14 tools**. First call
 `obsidian_help({"topic":"read"})`, then `vault_list({"path":""})` and
 `vault_read({"path":"Hello.md"})` against the example Vault. A write-capable
 client can modify files with this server; choose its Vault and filesystem
@@ -133,10 +133,11 @@ absolute filesystem paths or stacks.
 | `vault_write` | Atomic text create/replace; existing files require `ifMatch` |
 | `vault_append` | Atomic append; existing files require `ifMatch`; missing LF added first as in Local REST |
 | `vault_patch` | Generic heading/block/frontmatter instruction; always requires `ifMatch` |
+| `vault_replace_text` | Atomic literal replacement of one unique exact string in an existing text file; always requires `ifMatch` |
 | `vault_move` | Move a file; destination suffix and optional `allowOverwrite` follow Local REST |
 | `vault_delete` | Recoverable Vault-local trash by default; `permanent: true` permanently deletes a file |
 
-The stdio entry exposes twelve Vault tools plus the static `obsidian_help` manual.
+The stdio entry exposes thirteen Vault tools plus the static `obsidian_help` manual.
 An embedded read-only composition exposes five text/discovery tools plus help,
 can add the binary reader and reference query, and can omit the mutation store. There are no mutation stubs. `search_simple` and
 its unused implementation are removed.
@@ -195,7 +196,11 @@ used to distinguish repeated headings. Block targets use a reference ID without
 and requires `targetType` and `target`; it is not a whole-file field selector.
 
 Targeted heading reads express levels relative to their scope. Use the map or
-a whole-file read to verify actual nesting after a structural edit.
+a whole-file read to verify actual nesting after a structural edit. For
+`vault_replace_text`, copy an unchanged slice from a whole-file read's `content`
+and use the `version` from that same response; targeted heading text is not
+guaranteed to be an exact source slice. Whole-file `vault_read` still parses
+frontmatter and can fail on malformed or unsupported YAML.
 <!-- /obsidian-help -->
 
 <!-- obsidian-help:binary -->
@@ -480,7 +485,7 @@ their displayed `#` counts alone cannot confirm the stored hierarchy.
 <!-- /obsidian-help -->
 
 <!-- obsidian-help:write -->
-### Writing and appending text
+### Writing, appending and replacing text
 
 `vault_write` creates a UTF-8 text file or replaces its whole content.
 `vault_append` adds text, creating the file if missing. Both create missing
@@ -497,6 +502,48 @@ LF, including an empty existing file. A missing file receives exactly the
 supplied content. Successful writes return a compact receipt with the new
 version, not the whole note. A successful receipt with a cleanup warning means
 the content was saved; inspect the warning instead of blindly appending again.
+
+`vault_replace_text` edits an existing text file with exactly four required
+fields: `path`, `oldText`, `newText` and `ifMatch`. It searches the whole
+file for a literal, case-sensitive exact match. `oldText` must be nonempty
+and occur exactly once, counting overlapping occurrences. Zero or multiple
+matches fail without writing; error details contain `matchCount: 0` or
+`matchCountAtLeast: 2`, without source offsets or snippets. Expand `oldText`
+with surrounding original text to make the intended location unique.
+An empty `newText` deletes that match. Equal old and new strings fail with
+`vault_mutation.no_change`. The new string is literal too: `$&` and `$1` have
+no substitution meaning.
+
+First read the whole file with `vault_read({"path":"note.md"})`. For a note
+whose `content` contains `Old body.` exactly once, copy that original text and
+the same response's `version`, then call `vault_replace_text`:
+
+```json
+{
+  "path": "note.md",
+  "oldText": "Old body.",
+  "newText": "New body. $& is literal.",
+  "ifMatch": "<current version>"
+}
+```
+
+The two strings together may contain at most 4 MiB of UTF-8 bytes. Both the
+original and resulting file must also fit the store's configured text limit
+(4 MiB by default, 64 MiB hard maximum). No newline, BOM or Unicode
+normalization is applied; unmatched bytes remain unchanged. Replacement uses
+the shared version checks and atomic commit, without the Markdown parser or
+automatic retries. The whole-file read still parses frontmatter, so this is
+not a malformed-YAML recovery workflow. Targeted heading reads normalize
+levels and may not supply an exact source slice. There are no scope, index,
+replace-all, regex, fuzzy-match or batch options.
+
+Write, append, patch and exact replacement receipts contain `beforeSizeBytes`
+for the original file and `sizeBytes` for the saved file, in UTF-8 bytes.
+`beforeSizeBytes: 0` applies to both missing and empty files; `created`
+distinguishes them. Exact replacement also returns `replacementCount: 1`.
+These compact signals do not confirm Markdown structure or editing intent;
+inspect the saved content or document map when that matters. Receipts do not
+include diffs, heading lists, target echoes or the note body.
 <!-- /obsidian-help -->
 
 <!-- obsidian-help:paths -->
@@ -516,13 +563,13 @@ The mutation path is deliberately small:
 
 1. Serialize the relative path across store instances in this process; safely
    read existing bytes and require exact-byte `ifMatch` for existing write/append
-   and all patches. Validate the prepared text before changing files.
+   and every patch/exact replacement. Validate the prepared text before changing files.
 2. Create missing parent directories through the shared sandbox. Write a hidden
    `.obsidian-mcp-<random>.tmp` beside the target using exclusive creation.
    Normal OS creation defaults inherit directory permissions/default ACLs;
    MCP never calls chown/chmod/setfacl or runs a permissions hook.
 3. Flush the completed temporary file, close it, and revalidate parents, path,
-   temporary identity and the original exact-byte version. No append/patch retry.
+   temporary identity and the original exact-byte version. No automatic mutation retry.
 4. Atomically rename over an existing file. For a missing file, atomic hard-link
    publication refuses a concurrent new destination, then removes the temp name.
    Node rename has no NOREPLACE flag. No unlink-before-replace or copy fallback.
@@ -552,9 +599,10 @@ on each deployment's operating system and filesystem.
 
 Stdio requires only `OBSIDIAN_VAULT_ROOT`; no staging-root or policy-module
 configuration is needed. Protocol output uses stdout; diagnostics use stderr.
-Write/append/patch success is a compact `message: "OK"` receipt with path,
-exact-byte version, byte count, creation status and any warnings, without echoing
-the note body.
+Write/append/patch/exact-replacement success is a compact `message: "OK"`
+receipt with path, exact-byte version, `beforeSizeBytes`, final `sizeBytes`,
+`created` and any warnings. Exact replacement adds `replacementCount: 1`;
+the note body is not echoed.
 
 <!-- obsidian-help:files -->
 ## Moving and deleting files

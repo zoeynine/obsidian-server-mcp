@@ -14,6 +14,7 @@ import { nativeMutationIO, type MutationIO } from "./mutation-io.js";
 import { withPathLock } from "./path-lock.js";
 import { checkDirectories, ensureParentDirectories, hasCode, sameIdentity, sameSnapshot } from "./filesystem-checks.js";
 import { changed, VaultMutationError } from "./mutation-errors.js";
+import { assertTextReplacementInput, prepareTextReplacement } from "./prepare-text-replacement.js";
 import { deleteVaultFile, moveVaultFile, type VaultDeleteOptions, type VaultDeleteResult, type VaultMoveOptions, type VaultMoveResult } from "./file-operations.js";
 export { VaultMutationError, type VaultMutationErrorCode } from "./mutation-errors.js";
 
@@ -27,9 +28,13 @@ export interface VaultMutationResult {
   readonly message: "OK";
   readonly path: VaultRelativePath;
   readonly version: ContentVersion;
+  readonly beforeSizeBytes: number;
   readonly sizeBytes: number;
   readonly created: boolean;
   readonly warnings?: readonly (Warning | { readonly code: "temporary_cleanup_failed"; readonly message: string })[];
+}
+export interface VaultTextReplacementResult extends VaultMutationResult {
+  readonly replacementCount: 1;
 }
 interface Snapshot { readonly document: VaultDocumentReadResult; readonly stats: BigIntStats }
 
@@ -89,6 +94,22 @@ export class VaultMutationStore {
       return { content: prepared.document, warnings: prepared.warnings };
     });
   }
+  async replaceText(inputPath: string, oldText: string, newText: string,
+    options: { readonly ifMatch: string }): Promise<VaultTextReplacementResult> {
+    this.#sandbox.parse(inputPath);
+    assertTextPath(inputPath);
+    // Strings and the version are captured before waiting on the path lock.
+    const ifMatch = options?.ifMatch;
+    if (typeof ifMatch !== "string") {
+      throw new VaultMutationError("if_match_required", "vault_replace_text requires ifMatch", { path: inputPath });
+    }
+    assertTextReplacementInput(inputPath, oldText, newText);
+    const result = await this.#mutate(inputPath, ifMatch, true, previous => ({
+      content: prepareTextReplacement(inputPath, previous!.content, oldText, newText),
+      warnings: [],
+    }));
+    return { ...result, replacementCount: 1 };
+  }
   #validateText(inputPath: string, content: string): void {
     this.#sandbox.parse(inputPath);
     assertTextPath(inputPath);
@@ -129,6 +150,7 @@ export class VaultMutationStore {
       this.#validateText(relative, prepared.content);
       const bytes = Buffer.from(prepared.content, "utf8");
       const version = computeContentVersion(bytes);
+      const beforeSizeBytes = previous?.document.sizeBytes ?? 0;
       const parents = await ensureParentDirectories(this.#sandbox, relative);
       const destination = (await this.#sandbox.resolve(relative, { rejectNameAliases: true })).absolutePath;
       // Same directory => same filesystem and natural owner/group/default-ACL
@@ -199,7 +221,7 @@ export class VaultMutationStore {
       // name cannot be cleaned. Warn instead of inviting a repeated append.
       const warnings = [...prepared.warnings, ...(cleanupFailure ? [{ code: "temporary_cleanup_failed" as const,
         message: "The note was saved, but a protected temporary file remains; filesystem cleanup is needed." }] : [])];
-      return { message: "OK", path: relative, version, sizeBytes: bytes.length, created: previous === undefined,
+      return { message: "OK", path: relative, version, beforeSizeBytes, sizeBytes: bytes.length, created: previous === undefined,
         ...(warnings.length ? { warnings } : {}) };
     });
   }

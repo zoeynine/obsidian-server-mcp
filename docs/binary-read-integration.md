@@ -142,7 +142,7 @@ production signing, HTTP download enforcement or model ingestion.
 After installing and wiring the deployment, validate it with isolated fixtures:
 
 1. Rediscover the configured tools and the `binary` help topic through the
-   intended client. A composition matching stock stdio exposes 13 tools, including
+   intended client. A composition matching stock stdio exposes 14 tools, including
    `reference_query`; each optional capability must be wired explicitly.
 2. Confirm a fixture image returns a bounded native image preview.
 3. Call a PDF with omitted `as` and explicit `auto`, `bytes`, `link`; all must
