@@ -114,7 +114,7 @@ copyright and complete MIT notice are retained in
 
 ## Implemented MCP tools
 
-All tools have strict input/output schemas. Text-tool success payloads appear
+Default tools have strict input/output schemas. Text-tool success payloads appear
 once in `structuredContent`, with empty content. Attachment payloads appear once
 in native MCP `content`, with only metadata in `structuredContent`. Known failures return compact
 structured errors and a short text equivalent; unexpected failures reveal no
@@ -146,6 +146,7 @@ Properties use generic patching. Binary upload, copy and Desktop UI tools remain
 Properties are edited through `vault_patch(targetType=frontmatter)`; edits
 preserve unrelated property text/comments, body, BOM and line endings. YAML
 aliases, anchors, duplicate/complex keys and non-JSON values are refused.
+
 Obsidian's Desktop link graph is unavailable and never fabricated. The separate
 reference query implements the [bounded filesystem reference contract](docs/reference-query.md).
 JsonLogic
@@ -155,6 +156,25 @@ it is no longer predicate-only. There is no search database or whole-Vault snaps
 Operational note: under the current server parser semantics, malformed or
 unsupported frontmatter in a single note can make whole-Vault `search_query`
 and `tag_list` fail explicitly.
+
+### Optional text-only reading
+
+An embedding host can enable `vault_read_text` by calling
+`createVaultMcpServer(dependencies, { enableTextRead: true })`. It uses the same
+reader, strict input schema, source limits, path policy, error mapping and
+exact-byte version as `vault_read`. It returns the same payload as JSON in one
+text block, omitting both `outputSchema` and `structuredContent`; successful
+payloads are still validated internally. Business errors retain `isError: true`.
+Chinese characters are emitted directly; JSON still escapes line breaks and
+literal backslashes.
+
+This option is off by default and is not exposed by the standard stdio entry.
+When enabled in a full deployment, the same authenticated MCP endpoint exposes
+15 tools. Every client discovering that endpoint can see the additional tool;
+existing tools retain their contracts. The host reuses its current dependencies
+and authorization gate, with no second Vault reader or upstream MCP connection.
+Disable the option to remove the additional tool. This is an opt-in read
+compatibility path; it does not change other tools' presentation or error handling.
 
 ### On-demand help
 

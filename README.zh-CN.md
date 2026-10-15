@@ -17,7 +17,7 @@
 
 ## 能做什么
 
-当前公开 surface 共 **14 个 MCP 工具**，包括：
+默认 surface 共 **14 个 MCP 工具**，包括：
 
 - 列出、读取 Vault 文件与指定 heading / block / frontmatter；
 - 获取 document map，定位可精确读取或修改的结构节点；
@@ -31,6 +31,12 @@
 - 按需读取 `obsidian_help`。
 
 其中 `vault_patch`、引用查询、binary delivery、错误语义和预算限制等完整说明都在英文 README 与 `docs/` 中。
+
+嵌入式宿主可通过 `createVaultMcpServer(dependencies, { enableTextRead: true })`
+额外启用 `vault_read_text`，复用原读取能力，以 text-only JSON 返回相同内容与版本。
+它不声明 `outputSchema`、不返回 `structuredContent`，适用于需要纯文本结果的客户端。
+默认关闭，标准 stdio 入口不启用；原 14 个工具的行为保持不变。
+详见 [可选文本读取](README.md#optional-text-only-reading)。
 
 ## 快速开始
 

@@ -29,13 +29,19 @@ PDF paths are intentionally unsupported by all binary modes and the resource
 reader; core returns unsupported_pdf with guidance to native client attachments.
 Download hosts also apply core's assertBinaryPath policy to existing signed URLs.
 
-Every tool has strict input/output schemas. Text success uses structuredContent
+Every default tool has strict input/output schemas. Text success uses structuredContent
 only (empty content), without duplicate bodies. Binary success uses native image,
 embedded-resource or resource-link content and compact metadata; binary data is
 never copied into structuredContent. Targeted reads return
 {path,version,result}, queries {results}, and mutations a compact OK receipt.
 Known errors have stable codes with short text and structured payloads;
 unexpected exceptions are sanitized. SDK input/protocol errors remain SDK errors.
+
+An embedding host may opt into the vault_read_text compatibility tool
+with createVaultMcpServer(dependencies, { enableTextRead: true }). It shares the
+vault_read input schema, reader and error mapping, validates successful output
+internally, and emits text-only JSON without outputSchema or structuredContent.
+The default tool set and standard stdio entry remain unchanged.
 
 Core owns exact-byte ifMatch, per-path serialization, guarded sibling temporary
 files, final revalidation, atomic publication and cleanup. No automatic mutation retry,

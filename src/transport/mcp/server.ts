@@ -31,6 +31,7 @@ export const TAG_LIST_TOOL_NAME = "tag_list";
 export const VAULT_GET_DOCUMENT_MAP_TOOL_NAME = "vault_get_document_map";
 export const VAULT_LIST_TOOL_NAME = "vault_list";
 export const VAULT_READ_TOOL_NAME = "vault_read";
+export const VAULT_READ_TEXT_TOOL_NAME = "vault_read_text";
 export const VAULT_WRITE_TOOL_NAME = "vault_write";
 export const VAULT_APPEND_TOOL_NAME = "vault_append";
 export const VAULT_PATCH_TOOL_NAME = "vault_patch";
@@ -56,6 +57,12 @@ const readOutput = z.union([
     stat: z.object({ ctime: z.number().finite(), mtime: z.number().finite(), size: z.number().int().nonnegative() }).strict() }).strict(),
   z.object({ path: z.string(), version, result: z.json() }).strict(),
 ]);
+const readInput = z.object({ path: z.string(), maxBytes,
+  targetType: z.enum(["heading", "block", "frontmatter"]).optional(),
+  target: z.union([z.array(z.string()), z.string()]).optional()
+    .describe('Pair with targetType. Heading: full map path, e.g. ["Root","Child"]; block: ID without ^; property: key.'),
+  scope: z.enum(["content", "marker", "markerAndContent"]).optional()
+    .describe("Requires a target; defaults to content.") }).strict();
 
 export type VaultReadUseCase = (path: string, options?: ReadVaultNoteOptions) => Promise<VaultNoteReadResult>;
 export type VaultListUseCase = (path?: string, options?: ListVaultEntriesOptions) => Promise<{ readonly files: readonly string[] }>;
@@ -74,6 +81,10 @@ export interface VaultMcpServerDependencies {
   readonly readBinary?: VaultBinaryReadUseCase;
   readonly createBinaryLink?: VaultBinaryLinkProvider;
 }
+export interface VaultMcpServerOptions {
+  /** Opt-in text-only reading; shares the existing reader and authorization boundary. */
+  readonly enableTextRead?: boolean;
+}
 
 function semanticError(error: unknown, targetType?: unknown): CallToolResult | undefined {
   if (!(error instanceof VaultTextError || error instanceof VaultSemanticError || error instanceof EngineError)) return undefined;
@@ -85,20 +96,26 @@ function semanticError(error: unknown, targetType?: unknown): CallToolResult | u
   return { content: [{ type: "text", text: JSON.stringify(payload) }], structuredContent: payload, isError: true };
 }
 
-export function createVaultMcpServer(dependencies: VaultMcpServerDependencies): McpServer {
+export function createVaultMcpServer(dependencies: VaultMcpServerDependencies, options: VaultMcpServerOptions = {}): McpServer {
   const server = new McpServer({ name: MCP_SERVER_NAME, version: MCP_SERVER_VERSION });
   if (dependencies.referenceQuery) registerReferenceQuery(server, dependencies.referenceQuery);
   function register<I extends z.ZodRawShape>(name: string, description: string, input: z.ZodObject<I>, output: z.ZodType,
     run: (args: z.infer<z.ZodObject<I>>) => Promise<unknown>, mapError: (error: unknown, args: z.infer<z.ZodObject<I>>) => CallToolResult,
-    mutation?: { readonly destructive: boolean; readonly idempotent: boolean }): void {
-    server.registerTool(name, { description, inputSchema: input, outputSchema: output,
+    mutation?: { readonly destructive: boolean; readonly idempotent: boolean }, textOnly = false): void {
+    server.registerTool(name, { description, inputSchema: input, ...(textOnly ? {} : { outputSchema: output }),
       annotations: { readOnlyHint: mutation === undefined, destructiveHint: mutation?.destructive ?? false,
         idempotentHint: mutation?.idempotent ?? true, openWorldHint: false } },
       async (args): Promise<CallToolResult> => {
         try {
           const result = await run(args as z.infer<z.ZodObject<I>>);
+          // Keep output validation even though the compatibility tool advertises no output schema.
+          if (textOnly) return { content: [{ type: "text", text: JSON.stringify(output.parse(result)) }] };
           return { content: [], structuredContent: result as CallToolResult["structuredContent"] };
-        } catch (error) { return semanticError(error, (args as { targetType?: unknown }).targetType) ?? mapError(error, args as z.infer<z.ZodObject<I>>); }
+        } catch (error) {
+          const failure = semanticError(error, (args as { targetType?: unknown }).targetType) ?? mapError(error, args as z.infer<z.ZodObject<I>>);
+          if (textOnly) delete failure.structuredContent;
+          return failure;
+        }
       });
   }
   register(OBSIDIAN_HELP_TOOL_NAME, "Usage manual; omit topic for the topic index.",
@@ -109,14 +126,14 @@ export function createVaultMcpServer(dependencies: VaultMcpServerDependencies): 
       maxEntries: z.number().int().min(1).max(MAX_VAULT_LIST_ENTRIES).optional() }).strict(),
     z.object({ files: z.array(z.string()) }).strict(),
     ({path, maxEntries}) => dependencies.listEntries(path ?? "", maxEntries === undefined ? {} : {maxEntries}), mapVaultListToolError);
+  const runRead = ({path, ...readOptions}: z.infer<typeof readInput>) =>
+    dependencies.readDocument(path, defined(readOptions) as ReadVaultNoteOptions);
   register(VAULT_READ_TOOL_NAME, "Read a Vault text file or target with its version. Discover targets via vault_get_document_map; targeted heading levels are relative. No link graph.",
-    z.object({ path: z.string(), maxBytes,
-      targetType: z.enum(["heading", "block", "frontmatter"]).optional(),
-      target: z.union([z.array(z.string()), z.string()]).optional()
-        .describe('Pair with targetType. Heading: full map path, e.g. ["Root","Child"]; block: ID without ^; property: key.'),
-      scope: z.enum(["content", "marker", "markerAndContent"]).optional()
-        .describe("Requires a target; defaults to content.") }).strict(), readOutput,
-    ({path, ...options}) => dependencies.readDocument(path, defined(options) as ReadVaultNoteOptions), mapVaultReadToolError);
+    readInput, readOutput, runRead, mapVaultReadToolError);
+  if (options.enableTextRead === true) {
+    register(VAULT_READ_TEXT_TOOL_NAME, "Read a Vault text file or target as text-only JSON. Same inputs, read limits and exact-byte version as vault_read. Discover targets via vault_get_document_map; targeted heading levels are relative.",
+      readInput, readOutput, runRead, mapVaultReadToolError, undefined, true);
+  }
   register(VAULT_GET_DOCUMENT_MAP_TOOL_NAME, "Get heading paths, block IDs, property names and exact-byte version. Copy returned keys unchanged for targeted reads/patches.",
     z.object({ path: z.string(), maxBytes, maxHeadings: z.number().int().min(1).max(MAX_DOCUMENT_MAP_HEADINGS).optional() }).strict(),
     z.object({ path: z.string(), version, headings: headingTree, blocks: z.array(z.string()), frontmatterFields: z.array(z.string()) }).strict(),
