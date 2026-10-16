@@ -17,5 +17,5 @@ export function mapObsidianHelpError(error: unknown): CallToolResult {
   const payload = { error: error instanceof UnknownHelpTopicError
     ? { code: "obsidian_help.unknown_topic", message: "Unknown topic. " + index }
     : { code: "obsidian_help.internal_error", message: "Help lookup failed unexpectedly" } };
-  return { content: [{ type: "text", text: JSON.stringify(payload) }], structuredContent: payload, isError: true };
+  return { content: [{ type: "text", text: JSON.stringify(payload) }], isError: true };
 }

@@ -29,7 +29,7 @@ export function registerReferenceQuery(server: McpServer, run: ReferenceQueryUse
     catch (error) {
       const payload = error instanceof ReferenceQueryError ? { error: { code: `reference_query.${error.code}`, message: error.message } }
         : toKnownVaultReadToolErrorPayload(error) ?? { error: { code: "reference_query.internal_error", message: "reference_query failed unexpectedly" } };
-      return { isError: true, content: [{ type: "text", text: JSON.stringify(payload) }], structuredContent: payload };
+      return { isError: true, content: [{ type: "text", text: JSON.stringify(payload) }] };
     }
   });
 }

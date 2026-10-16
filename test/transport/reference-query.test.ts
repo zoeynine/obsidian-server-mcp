@@ -7,6 +7,7 @@ import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { REFERENCE_QUERY_TOOL_NAME } from "../../src/transport/mcp/reference-query.js";
 import type { ReferenceQueryResult } from "../../src/core/reference/types.js";
+import { readToolError } from "./tool-error.js";
 
 const tool = REFERENCE_QUERY_TOOL_NAME;
 const args = { scope: { directory: "", recursive: true }, target: { path: "Note.md" } };
@@ -66,12 +67,12 @@ test("reference query errors are compact, stable and do not disclose unexpected 
     [{ ...args, target: { path: "Note.md", heading: ["Title"], block: "id" } }, "reference_query.invalid_input"]] as const) {
     const response = await real.client.callTool({ name: tool, arguments: input });
     assert.equal(response.isError, true);
-    assert.equal((response.structuredContent as { error: { code: string } }).error.code, code);
+    assert.equal(readToolError(response).code, code);
     assert.ok(!JSON.stringify(response).includes(real.vault));
   }
   const broken = await binaryClient(t, { referenceQuery: async () => { throw new Error("SECRET_HOST_ROOT stack"); } });
   const response = await broken.client.callTool({ name: tool, arguments: args });
   assert.equal(response.isError, true);
-  assert.equal((response.structuredContent as { error: { code: string } }).error.code, "reference_query.internal_error");
+  assert.equal(readToolError(response).code, "reference_query.internal_error");
   assert.doesNotMatch(JSON.stringify(response), /SECRET_HOST_ROOT|stack/u);
 });

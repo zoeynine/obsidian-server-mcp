@@ -8,6 +8,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { MAX_BINARY_BYTES, computeContentVersion, type VaultBinaryReference } from "../../src/core/index.js";
 import { VAULT_READ_BINARY_TOOL_NAME } from "../../src/transport/mcp/vault-read-binary.js";
 import { binaryClient, binaryFixture, pdfFixture } from "../helpers/binary-fixture.js";
+import { readToolError } from "./tool-error.js";
 
 const tool = VAULT_READ_BINARY_TOOL_NAME;
 const validLink = () => ({ uri: "https://attachments.example.invalid/read?token=fixture", expiresAt: new Date(Date.now() + 60_000).toISOString() });
@@ -94,7 +95,7 @@ test("PDF tools and legacy resource URIs reject delivery in every mode with or w
       for (const options of [{}, { as: "auto" }, { as: "bytes" }, { as: "link" }] as const) {
         const result = await client.callTool({ name: tool, arguments: { path: name, ...options } });
         assert.equal(result.isError, true);
-        const error = metadata(result)["error"] as { code: string; message: string };
+        const error = readToolError(result);
         assert.equal(error.code, "vault_read_binary.unsupported_pdf");
         assert.match(error.message, /client.*native file upload or attachment/u);
         assert.ok(result.content.every(item => item.type === "text"));
@@ -145,7 +146,7 @@ test("missing integration fails explicitly for default downloads, image fallback
     { path: "small.bin", as: "link" }, { path: "empty.blob" }, { path: "large.bin" }, { path: "invalid.png" }]) {
     const result = await client.callTool({ name: tool, arguments: args });
     assert.equal(result.isError, true);
-    assert.equal((metadata(result)["error"] as { code: string }).code, "vault_read_binary.link_unavailable");
+    assert.equal(readToolError(result).code, "vault_read_binary.link_unavailable");
     assert.doesNotMatch(JSON.stringify(result), /file:\/\/|https:\/\//u);
   }
 });
@@ -179,6 +180,7 @@ test("link providers receive only a guarded relative reference, and unsafe paths
     for (const input of ["../outside.bin", ".obsidian/secret.bin", "missing.bin"]) {
       const rejected = await client.callTool({ name: tool, arguments: { path: input, as } });
       assert.equal(rejected.isError, true);
+      assert.match(readToolError(rejected).code, /^(vault_path\.|vault_read_binary\.not_found$)/u);
       assert.ok(!JSON.stringify(rejected).includes(vault));
     }
   }
@@ -202,7 +204,7 @@ test("links must be expiring HTTPS URLs without embedded credentials or fragment
     for (const as of ["auto", "link"] as const) {
       const result = await client.callTool({ name: tool, arguments: { path: "attachment.bin", as } });
       assert.equal(result.isError, true);
-      assert.equal((metadata(result)["error"] as { code: string }).code, "vault_read_binary.invalid_link");
+      assert.equal(readToolError(result).code, "vault_read_binary.invalid_link");
       assert.ok(!JSON.stringify(result).includes("password"));
     }
   }
@@ -215,7 +217,7 @@ test("read, permission and provider failures are sanitized and never retried", a
   await writeFile(path.join(vault, "attachment.bin"), Buffer.from([0xff, 0]));
   for (const as of ["auto", "link"] as const) {
     const failedLink = await client.callTool({ name: tool, arguments: { path: "attachment.bin", as } });
-    assert.equal((metadata(failedLink)["error"] as { code: string }).code, "vault_read_binary.link_failed");
+    assert.equal(readToolError(failedLink).code, "vault_read_binary.link_failed");
     assert.ok(!JSON.stringify(failedLink).includes(secret));
   }
   assert.equal(attempts, 2);
@@ -224,7 +226,7 @@ test("read, permission and provider failures are sanitized and never retried", a
     const result = await denied.client.callTool({ name: tool, arguments: { path: "attachment.bin" } });
     assert.equal(result.isError, true);
     assert.ok(!JSON.stringify(result).includes(secret));
-    assert.equal((metadata(result)["error"] as { code: string }).code,
+    assert.equal(readToolError(result).code,
       code === "EIO" ? "vault_read_binary.internal_error" : "vault_read_binary.permission_denied");
   }
 });
@@ -251,11 +253,11 @@ test("stock stdio refuses all PDF modes while non-PDF bytes, links and previews 
   for (const options of [{}, { as: "auto" }, { as: "bytes" }, { as: "link" }] as const) {
     const rejected = await client.callTool({ name: tool, arguments: { path: "fixture.pdf", ...options } });
     assert.equal(rejected.isError, true);
-    assert.equal((metadata(rejected)["error"] as { code: string }).code, "vault_read_binary.unsupported_pdf");
+    assert.equal(readToolError(rejected).code, "vault_read_binary.unsupported_pdf");
   }
   const download = await client.callTool({ name: tool, arguments: { path: "fixture.bin" } });
   assert.equal(download.isError, true);
-  assert.equal((metadata(download)["error"] as { code: string }).code, "vault_read_binary.link_unavailable");
+  assert.equal(readToolError(download).code, "vault_read_binary.link_unavailable");
   const bytes = await client.callTool({ name: tool, arguments: { path: "fixture.bin", as: "bytes" } });
   assert.notEqual(bytes.isError, true);
   assert.equal(metadata(bytes)["delivery"], "bytes");

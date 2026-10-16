@@ -34,8 +34,10 @@ only (empty content), without duplicate bodies. Binary success uses native image
 embedded-resource or resource-link content and compact metadata; binary data is
 never copied into structuredContent. Targeted reads return
 {path,version,result}, queries {results}, and mutations a compact OK receipt.
-Known errors have stable codes with short text and structured payloads;
-unexpected exceptions are sanitized. SDK input/protocol errors remain SDK errors.
+Mapped tool errors use isError: true and a single JSON text block with stable error codes,
+messages and optional details. They omit structuredContent so clients do not validate
+the error body against a success output schema; unexpected exceptions are sanitized.
+SDK input/protocol errors remain SDK errors.
 
 An embedding host may opt into the vault_read_text compatibility tool
 with createVaultMcpServer(dependencies, { enableTextRead: true }). It shares the

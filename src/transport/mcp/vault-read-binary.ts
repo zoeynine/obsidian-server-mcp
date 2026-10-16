@@ -66,7 +66,7 @@ export function registerVaultBinaryTool(
         if (result.version !== expected) throw new BinaryDeliveryError("version_conflict", "Attachment changed; call vault_read_binary again");
         return { contents: [{ uri: uri.href, mimeType: result.mimeType, blob: result.data.toString("base64") }] };
       } catch (error) {
-        const mapped = mapVaultBinaryError(error).structuredContent as { error: { code: string; message: string } };
+        const mapped = toVaultBinaryErrorPayload(error);
         // Resource errors are protocol errors, not tool results. Never forward raw exceptions.
         throw new Error(mapped.error.code + ": " + mapped.error.message);
       }
@@ -116,6 +116,11 @@ class BinaryDeliveryError extends Error {
 }
 
 export function mapVaultBinaryError(error: unknown): CallToolResult {
+  const payload = toVaultBinaryErrorPayload(error);
+  return { content: [{ type: "text", text: JSON.stringify(payload) }], isError: true };
+}
+
+function toVaultBinaryErrorPayload(error: unknown) {
   const known = toKnownVaultReadToolErrorPayload(error);
   let payload: { error: { code: string; message: string; details?: Readonly<Record<string, boolean | number | string>> } };
   if (known) payload = { error: { ...known.error, code: known.error.code.replace(/^vault_read\./u, "vault_read_binary."),
@@ -123,5 +128,5 @@ export function mapVaultBinaryError(error: unknown): CallToolResult {
   else if (error instanceof VaultBinaryError || error instanceof BinaryDeliveryError) {
     payload = { error: { code: "vault_read_binary." + error.code, message: error.message } };
   } else payload = { error: { code: "vault_read_binary.internal_error", message: "vault_read_binary failed unexpectedly" } };
-  return { content: [{ type: "text", text: JSON.stringify(payload) }], structuredContent: payload, isError: true };
+  return payload;
 }

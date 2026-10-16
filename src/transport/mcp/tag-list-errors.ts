@@ -32,7 +32,6 @@ export function mapTagListToolError(error: unknown): CallToolResult {
   const payload = toTagListToolErrorPayload(error);
   return {
     content: [{ type: "text", text: JSON.stringify(payload) }],
-    structuredContent: payload,
     isError: true,
   };
 }

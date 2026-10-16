@@ -116,9 +116,11 @@ copyright and complete MIT notice are retained in
 
 Default tools have strict input/output schemas. Text-tool success payloads appear
 once in `structuredContent`, with empty content. Attachment payloads appear once
-in native MCP `content`, with only metadata in `structuredContent`. Known failures return compact
-structured errors and a short text equivalent; unexpected failures reveal no
-absolute filesystem paths or stacks.
+in native MCP `content`, with only metadata in `structuredContent`. Business failures return
+`isError: true` and a single JSON text block containing `error.code`, `error.message`
+and optional `error.details`. They omit `structuredContent` so the error body is not
+validated against the success output schema. Unexpected failures reveal no absolute
+filesystem paths or stacks.
 
 | Tool | Behavior |
 | --- | --- |

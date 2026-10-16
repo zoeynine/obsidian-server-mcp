@@ -18,5 +18,5 @@ export function mapVaultMutationToolError(error: unknown, path: string): CallToo
   } : {
     error: { code: "vault_mutation.io_error", message: "Mutation failed before publication", details: { path } },
   });
-  return { isError: true, content: [{ type: "text", text: JSON.stringify(payload) }], structuredContent: payload };
+  return { isError: true, content: [{ type: "text", text: JSON.stringify(payload) }] };
 }

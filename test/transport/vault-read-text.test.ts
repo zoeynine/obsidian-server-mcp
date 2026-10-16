@@ -92,7 +92,7 @@ test("text-read preserves business errors and existing path and source-size guar
     const text = await client.callTool({ name: "vault_read_text", arguments: args });
     assert.equal(canonical.isError, true);
     assert.equal(text.isError, true);
-    assert.deepEqual(textPayload(text), canonical.structuredContent);
+    assert.deepEqual(textPayload(text), textPayload(canonical));
   }
   const invalid = await client.callTool({ name: "vault_read_text", arguments: { path: "note.md", force: true } });
   assert.equal(invalid.isError, true);

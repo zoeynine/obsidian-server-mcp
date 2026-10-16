@@ -42,6 +42,7 @@ import {
   type VaultReadUseCase,
 } from "../../src/transport/mcp/server.js";
 import { serveVaultMcpStdio } from "../../src/transport/mcp/stdio.js";
+import { readToolError, readToolErrorPayload } from "./tool-error.js";
 
 test("a read-only composition exposes five Vault read tools plus static help", async (t) => {
   const harness = await createHarness(t);
@@ -111,7 +112,7 @@ test("whole-file and targeted reads recover using the exact source byte size", a
       arguments: { path: "bounded.md", ...selection, maxBytes: bytes.byteLength - 1 },
     });
     assert.equal(rejected.isError, true);
-    const payload = readTextPayload(rejected.content) as { error: {
+    const payload = readToolErrorPayload(rejected) as { error: {
       code: string; message: string; details: { path: string; maxBytes: number; observedSizeBytes: string };
     } };
     assert.equal(payload.error.code, "vault_read.too_large");
@@ -120,7 +121,6 @@ test("whole-file and targeted reads recover using the exact source byte size", a
     });
     assert.match(payload.error.message, /maxBytes limits the entire source file, not the selected target/u);
     assert.match(payload.error.message, /retry with maxBytes >= observedSizeBytes/u);
-    assert.deepEqual(rejected.structuredContent, payload);
     assertDoesNotLeakRootOrStack(rejected, harness.vault);
 
     const recovered = await harness.client.callTool({ name: VAULT_READ_TOOL_NAME,
@@ -147,7 +147,7 @@ test("vault_read does not suggest an impossible retry beyond the source hard cap
     arguments: { path: "oversized.md", maxBytes: MAX_VAULT_DOCUMENT_BYTES },
   });
   assert.equal(result.isError, true);
-  const payload = readTextPayload(result.content) as { error: { code: string; message: string; details: unknown } };
+  const payload = readToolErrorPayload(result) as { error: { code: string; message: string; details: unknown } };
   assert.equal(payload.error.code, "vault_read.too_large");
   assert.deepEqual(payload.error.details, { path: "oversized.md",
     maxBytes: MAX_VAULT_DOCUMENT_BYTES, observedSizeBytes: observedSizeBytes.toString(),
@@ -155,7 +155,6 @@ test("vault_read does not suggest an impossible retry beyond the source hard cap
   assert.match(payload.error.message, /maxBytes limits the entire source file/u);
   assert.match(payload.error.message, /exceeds the 67108864-byte maximum supported source size/u);
   assert.doesNotMatch(payload.error.message, /retry with/u);
-  assert.deepEqual(result.structuredContent, payload);
 });
 
 test("read and document-map tools advertise and accept the shared inclusive byte cap", async (t) => {
@@ -203,6 +202,7 @@ test("read and document-map schemas reject oversized budgets before calling core
       const message = readTextBlock(result.content);
       assert.equal(result.isError, true);
       assert.match(message, /Input validation error/u);
+      assert.equal(Object.hasOwn(result, "structuredContent"), false);
       assert.equal(message.includes(harness.vault), false);
       assert.equal(message.includes("stack"), false);
     }
@@ -219,7 +219,7 @@ test("core path failures become stable MCP tool errors", async (t) => {
   });
 
   assert.equal(result.isError, true);
-  assert.deepEqual(readTextPayload(result.content), {
+  assert.deepEqual(readToolErrorPayload(result), {
     error: {
       code: "vault_path.parent_traversal",
       details: {
@@ -249,9 +249,8 @@ test("read, list and document-map permission failures are classified without lea
     ] as const) {
       const result = await harness.client.callTool({ name, arguments: { path: "private.md" } });
       assert.equal(result.isError, true);
-      const payload = readTextPayload(result.content) as { error: { code: string } };
+      const payload = readToolErrorPayload(result);
       assert.equal(payload.error.code, `${prefix}.${osCode === "EIO" ? "internal_error" : "permission_denied"}`);
-      assert.deepEqual(result.structuredContent, payload);
       assertDoesNotLeakRootOrStack(result, harness.vault);
       assert.equal(JSON.stringify(result).includes(osCode), false);
     }
@@ -289,7 +288,7 @@ test("core list failures become stable MCP tool errors", async (t) => {
   });
 
   assert.equal(result.isError, true);
-  assert.deepEqual(readTextPayload(result.content), {
+  assert.deepEqual(readToolErrorPayload(result), {
     error: {
       code: "vault_list.not_directory",
       details: { path: "note.md" },
@@ -305,7 +304,7 @@ test("vault_list maps a real file-as-parent path to a stable not-found error", a
     arguments: { path: "note.md/nested" },
     name: VAULT_LIST_TOOL_NAME,
   });
-  const payload = readTextPayload(result.content);
+  const payload = readToolErrorPayload(result);
 
   assert.equal(result.isError, true);
   assert.deepEqual(payload, {
@@ -329,7 +328,7 @@ test("vault_list maps injected POSIX ENOTDIR without leaking filesystem details"
     arguments: { path: "note.md/nested" },
     name: VAULT_LIST_TOOL_NAME,
   });
-  const payload = readTextPayload(result.content);
+  const payload = readToolErrorPayload(result);
 
   assert.equal(result.isError, true);
   assert.deepEqual(payload, {
@@ -365,7 +364,7 @@ test("document-map path failures remain stable MCP tool errors", async (t) => {
     arguments: { path: "../outside.md" },
     name: VAULT_GET_DOCUMENT_MAP_TOOL_NAME,
   });
-  const payload = readTextPayload(result.content);
+  const payload = readToolErrorPayload(result);
 
   assert.equal(result.isError, true);
   assert.deepEqual(payload, {
@@ -392,7 +391,7 @@ test("document-map read failures retain the safe read error contract", async (t)
     arguments: { path: "invalid.md" },
     name: VAULT_GET_DOCUMENT_MAP_TOOL_NAME,
   });
-  const payload = readTextPayload(result.content);
+  const payload = readToolErrorPayload(result);
 
   assert.equal(result.isError, true);
   assert.deepEqual(payload, {
@@ -413,7 +412,7 @@ test("document-map parser bounds become stable MCP tool errors", async (t) => {
     arguments: { maxHeadings: 1, path: "large-map.md" },
     name: VAULT_GET_DOCUMENT_MAP_TOOL_NAME,
   });
-  const payload = readTextPayload(result.content);
+  const payload = readToolErrorPayload(result);
 
   assert.equal(result.isError, true);
   assert.deepEqual(payload, {
@@ -467,7 +466,7 @@ test("search_query transport errors are stable and do not disclose roots or stac
     arguments: { query: { var: "backlinks" } },
     name: SEARCH_QUERY_TOOL_NAME,
   });
-  const invalidPayload = readTextPayload(invalid.content);
+  const invalidPayload = readToolErrorPayload(invalid);
   assert.equal(invalid.isError, true);
   assert.deepEqual(invalidPayload, {
     error: {
@@ -487,7 +486,7 @@ test("search_query transport errors are stable and do not disclose roots or stac
     },
     name: SEARCH_QUERY_TOOL_NAME,
   });
-  const budgetPayload = readTextPayload(budget.content);
+  const budgetPayload = readToolErrorPayload(budget);
   assert.equal(budget.isError, true);
   assert.deepEqual(budgetPayload, {
     error: {
@@ -553,12 +552,14 @@ test("search_query advertises strict optional scope and rejects malformed scope 
       arguments: { query: { var: "path" }, scope } });
     assert.equal(result.isError, true);
     assert.match(readTextBlock(result.content), /Input validation error/u);
+    assert.equal(Object.hasOwn(result, "structuredContent"), false);
     assertDoesNotLeakRootOrStack(result, harness.vault);
   }
   const tagScope = await harness.client.callTool({ name: TAG_LIST_TOOL_NAME,
     arguments: { scope: { directory: "", recursive: true } } });
   assert.equal(tagScope.isError, true);
   assert.match(readTextBlock(tagScope.content), /Input validation error/u);
+  assert.equal(Object.hasOwn(tagScope, "structuredContent"), false);
   assert.equal(coreCalls, 0);
 });
 
@@ -575,10 +576,9 @@ test("search_query scope failures retain safe path and traversal error mapping",
     const result = await harness.client.callTool({ name: SEARCH_QUERY_TOOL_NAME,
       arguments: { query: { var: "path" }, scope: { directory, recursive: true } } });
     assert.equal(result.isError, true);
-    const payload = readTextPayload(result.content) as { error: { code: string } };
+    const payload = readToolErrorPayload(result);
     assert.equal(payload.error.code, code);
-    assert.deepEqual(result.structuredContent, payload);
-    assert.equal("results" in (result.structuredContent ?? {}), false);
+    assert.equal("results" in payload, false);
     assertDoesNotLeakRootOrStack(result, harness.vault);
   }
 });
@@ -596,16 +596,18 @@ test("search_query reports aggregate and per-note output overflow as a result bu
       arguments: { query: { cat: Array.from({ length: copies }, () => ({ var: "content" })) } },
     });
     assert.equal(result.isError, true);
-    const payload = readTextPayload(result.content) as {
-      error: { code: string; details: { budget: string; limit: number; observedAtLeast: string } };
-    };
+    const payload = readToolErrorPayload(result);
     assert.equal(payload.error.code, "search_query.budget_exceeded");
-    assert.equal(payload.error.details.budget, "maxOutputBytes");
-    assert.equal(payload.error.details.limit, 4 * 1024 * 1024);
-    assert.ok(BigInt(payload.error.details.observedAtLeast) > BigInt(payload.error.details.limit));
-    assert.deepEqual(result.structuredContent, payload);
+    const details = payload.error.details;
+    assert.ok(details);
+    assert.equal(details["budget"], "maxOutputBytes");
+    const limit = details["limit"];
+    const observedAtLeast = details["observedAtLeast"];
+    assert.equal(limit, 4 * 1024 * 1024);
+    assert.ok(typeof limit === "number" && typeof observedAtLeast === "string");
+    assert.ok(BigInt(observedAtLeast) > BigInt(limit));
     assertDoesNotLeakRootOrStack(result, harness.vault);
-    assert.equal("results" in (result.structuredContent ?? {}), false);
+    assert.equal("results" in payload, false);
   }
 });
 
@@ -620,7 +622,7 @@ test("search_query read failures reuse the stable safe-read MCP error contract",
     arguments: { query: { "!=": [{ var: "path" }, "never"] } },
     name: SEARCH_QUERY_TOOL_NAME,
   });
-  const payload = readTextPayload(result.content);
+  const payload = readToolErrorPayload(result);
 
   assert.equal(result.isError, true);
   assert.deepEqual(payload, {
@@ -672,7 +674,7 @@ test("search_query unknown use-case failures become generic MCP errors", async (
     arguments: { query: { "==": ["a", "a"] } },
     name: SEARCH_QUERY_TOOL_NAME,
   });
-  const payload = readTextPayload(result.content);
+  const payload = readToolErrorPayload(result);
 
   assert.equal(result.isError, true);
   assert.deepEqual(payload, {
@@ -718,7 +720,7 @@ test("tag-list budgets become stable MCP tool errors without root or stack discl
     arguments: { maxTags: 1 },
     name: TAG_LIST_TOOL_NAME,
   });
-  const payload = readTextPayload(result.content);
+  const payload = readToolErrorPayload(result);
 
   assert.equal(result.isError, true);
   assert.deepEqual(payload, {
@@ -746,7 +748,7 @@ test("tag-list read failures reuse the stable safe-read MCP error contract", asy
     arguments: {},
     name: TAG_LIST_TOOL_NAME,
   });
-  const payload = readTextPayload(result.content);
+  const payload = readToolErrorPayload(result);
 
   assert.equal(result.isError, true);
   assert.deepEqual(payload, {
@@ -771,7 +773,7 @@ test("tag-list unknown failures become generic MCP errors without sensitive deta
     arguments: {},
     name: TAG_LIST_TOOL_NAME,
   });
-  const payload = readTextPayload(result.content);
+  const payload = readToolErrorPayload(result);
 
   assert.equal(result.isError, true);
   assert.deepEqual(payload, {
@@ -816,6 +818,7 @@ test("all discovered tools have input/output schemas and reject unknown input fi
     assert.equal(tool.inputSchema["additionalProperties"], false);
     const response = await harness.client.callTool({name: tool.name, arguments: { path: "note.md", query: {var: "path"}, unknown: "field" }});
     assert.equal(response.isError, true);
+    assert.equal(Object.hasOwn(response, "structuredContent"), false);
   }
 });
 
@@ -849,7 +852,7 @@ test("write, append and generic frontmatter patch use one structured compact com
     beforeSizeBytes: 0, sizeBytes: Buffer.byteLength(source), created: true });
   const required = await harness.client.callTool({ name: VAULT_APPEND_TOOL_NAME, arguments: { path: "folder/note.md", content: "next" } });
   assert.equal(required.isError, true);
-  assert.equal((required.structuredContent as {error: {code: string}}).error.code, "vault_mutation.if_match_required");
+  assert.equal(readToolError(required).code, "vault_mutation.if_match_required");
   const appended = await harness.client.callTool({ name: VAULT_APPEND_TOOL_NAME, arguments: { path: "folder/note.md", content: "next", ifMatch: firstVersion } });
   assert.notEqual(appended.isError, true, JSON.stringify(appended));
   assert.deepEqual(appended.content, []);
@@ -858,7 +861,7 @@ test("write, append and generic frontmatter patch use one structured compact com
   assert.deepEqual(appended.structuredContent, { message: "OK", path: "folder/note.md", version: secondVersion,
     beforeSizeBytes: Buffer.byteLength(source), sizeBytes: Buffer.byteLength(source + "\nnext"), created: false });
   const stale = await harness.client.callTool({ name: VAULT_APPEND_TOOL_NAME, arguments: { path: "folder/note.md", content: "twice", ifMatch: firstVersion } });
-  assert.equal((stale.structuredContent as {error: {code: string}}).error.code, "vault_mutation.version_conflict");
+  assert.equal(readToolError(stale).code, "vault_mutation.version_conflict");
   const patched = await harness.client.callTool({ name: VAULT_PATCH_TOOL_NAME, arguments: { path: "folder/note.md", targetType: "frontmatter", target: "status", operation: "replace", value: "done", ifMatch: secondVersion } });
   assert.notEqual(patched.isError, true, JSON.stringify(patched));
   assert.deepEqual(patched.content, []);
@@ -876,12 +879,13 @@ test("mutation wire rejects unsafe paths, text and malformed patch instructions 
     { path: "NUL.md", content: "x" }, { path: "image.png", content: "x" }, { path: "text.md", content: "\0" }]) {
     const result = await harness.client.callTool({ name: VAULT_WRITE_TOOL_NAME, arguments: args });
     assert.equal(result.isError, true, JSON.stringify(args));
+    readToolError(result);
     assertDoesNotLeakRootOrStack(result, harness.vault);
   }
   await writeFile(path.join(harness.vault, "note.md"), "---\nkey: value\n---\n");
   const result = await harness.client.callTool({ name: VAULT_PATCH_TOOL_NAME, arguments: { path: "note.md", targetType: "frontmatter", target: "key", operation: "replace", content: "wrong carrier", ifMatch: computeContentVersion("---\nkey: value\n---\n") } });
   assert.equal(result.isError, true);
-  assert.equal((result.structuredContent as {error: {code: string}}).error.code, "vault_semantic.invalid_instruction");
+  assert.equal(readToolError(result).code, "vault_semantic.invalid_instruction");
 });
 
 test("filesystem permission errors remain authoritative and do not disclose host paths", async t => {
@@ -891,7 +895,7 @@ test("filesystem permission errors remain authoritative and do not disclose host
   await writeFile(path.join(harness.vault, "note.md"), "old");
   const result = await harness.client.callTool({ name: VAULT_APPEND_TOOL_NAME, arguments: { path: "note.md", content: "new", ifMatch: computeContentVersion("old") } });
   assert.equal(result.isError, true);
-  const payload = result.structuredContent as {error: {code: string}};
+  const payload = readToolErrorPayload(result);
   assert.equal(payload.error.code, "vault_mutation.permission_denied");
   assert.equal((await readVaultDocument(harness.sandbox, "note.md")).content, "old");
   assertDoesNotLeakRootOrStack(result, harness.vault);
@@ -902,7 +906,7 @@ test("move and delete expose pinned arguments and compact structured success rec
   await writeFile(path.join(h.vault, "note.md"), "source");
   await writeFile(path.join(h.vault, "existing.md"), "old");
   const blocked = await h.client.callTool({ name: VAULT_MOVE_TOOL_NAME, arguments: { path: "note.md", destination: "existing.md" } });
-  assert.equal((blocked.structuredContent as {error: {code: string}}).error.code, "vault_mutation.destination_exists");
+  assert.equal(readToolError(blocked).code, "vault_mutation.destination_exists");
   const moved = await h.client.callTool({ name: VAULT_MOVE_TOOL_NAME, arguments: { path: "note.md", destination: "existing.md", allowOverwrite: true } });
   assert.notEqual(moved.isError, true, JSON.stringify(moved));
   assert.deepEqual(moved.content, []);
@@ -936,6 +940,7 @@ test("move/delete wire rejects unsafe input, stale versions and filesystem denia
   ] as const) {
     const result = await h.client.callTool({ name, arguments: args });
     assert.equal(result.isError, true);
+    assert.equal(Object.hasOwn(result, "structuredContent"), false);
     assertDoesNotLeakRootOrStack(result, h.vault);
   }
   for (const [name, args] of [
@@ -944,7 +949,7 @@ test("move/delete wire rejects unsafe input, stale versions and filesystem denia
     [VAULT_DELETE_TOOL_NAME, {path: "note.md", permanent: true}],
   ] as const) {
     const result = await h.client.callTool({ name, arguments: args });
-    assert.equal((result.structuredContent as {error: {code: string}}).error.code, "vault_mutation.permission_denied");
+    assert.equal(readToolError(result).code, "vault_mutation.permission_denied");
     assertDoesNotLeakRootOrStack(result, h.vault);
   }
   assert.equal(await readFile(path.join(h.vault, "note.md"), "utf8"), "original");
@@ -1040,12 +1045,6 @@ function assertFiniteNumber(value: unknown, key: string): number {
   }
 
   return value[key as keyof typeof value] as number;
-}
-
-function readTextPayload(
-  content: readonly { readonly text?: string; readonly type: string }[],
-): unknown {
-  return JSON.parse(readTextBlock(content));
 }
 
 function readTextBlock(

@@ -5,6 +5,7 @@ import * as path from "node:path";
 import test, { type TestContext } from "node:test";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
+import { readToolError as error } from "./tool-error.js";
 import { computeContentVersion } from "../../src/core/version/content-version.js";
 import { parseFrontmatter } from "../../src/core/document/note-json.js";
 
@@ -18,10 +19,6 @@ async function fixture(t: TestContext) {
     args: [path.resolve(".test-dist/src/stdio-main.js")], env: { OBSIDIAN_VAULT_ROOT: vault }, stderr: "pipe" }));
   return { client, vault };
 }
-function error(result: { structuredContent?: unknown }) {
-  return (result.structuredContent as { error: { code: string; message: string } }).error;
-}
-
 test("stdio heading replacement requires advertised confirmation and still enforces versioning", async t => {
   const { client, vault } = await fixture(t);
   const tool = (await client.listTools()).tools.find(item => item.name === "vault_patch")!;
@@ -44,6 +41,7 @@ test("stdio heading replacement requires advertised confirmation and still enfor
   }
   const malformed = await client.callTool({ name: "vault_patch", arguments: { ...input, allowSubtreeReplacement: "true" } });
   assert.equal(malformed.isError, true);
+  assert.equal(Object.hasOwn(malformed, "structuredContent"), false);
   const stale = await client.callTool({ name: "vault_patch", arguments: { ...input,
     allowSubtreeReplacement: true, ifMatch: computeContentVersion("stale") } });
   assert.equal(error(stale).code, "vault_mutation.version_conflict");

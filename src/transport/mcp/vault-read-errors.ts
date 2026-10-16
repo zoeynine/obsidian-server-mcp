@@ -60,7 +60,6 @@ export function mapVaultReadToolError(error: unknown): CallToolResult {
 
   return {
     content: [{ type: "text", text: JSON.stringify(payload) }],
-    structuredContent: payload,
     isError: true,
   };
 }

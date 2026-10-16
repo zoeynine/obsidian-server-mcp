@@ -6,6 +6,7 @@ import test, { type TestContext } from "node:test";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { OBSIDIAN_HELP_TOOL_NAME } from "../../src/transport/mcp/server.js";
 import { serveVaultMcpStdio } from "../../src/transport/mcp/stdio.js";
+import { readToolError } from "./tool-error.js";
 import { prepareVaultPatch } from "../../src/core/patch/prepare-vault-patch.js";
 import { computeContentVersion } from "../../src/core/version/content-version.js";
 import { parseVaultRelativePath, VaultPathSandbox } from "../../src/core/path/vault-path.js";
@@ -122,7 +123,7 @@ test("unknown help topics return a compact discoverable error and allow recovery
   for (const topic of ["missing", "", "__proto__", "constructor", "../../README.md"]) {
     const result = await client.callTool({ name: OBSIDIAN_HELP_TOOL_NAME, arguments: { topic } });
     assert.equal(result.isError, true);
-    const error = (result.structuredContent as { error: { code: string; message: string } }).error;
+    const error = readToolError(result);
     assert.equal(error.code, "obsidian_help.unknown_topic");
     assert.match(error.message, /\npatch: /u);
     assert.ok(error.message.length < 1000);

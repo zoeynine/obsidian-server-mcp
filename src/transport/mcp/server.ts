@@ -93,7 +93,7 @@ function semanticError(error: unknown, targetType?: unknown): CallToolResult | u
     ? 'Heading target or body block not found. Use the full heading path from the top level, e.g. ["Guide","Setup"], copying exact keys from vault_get_document_map. If within is set, also check its body-block index.'
     : error instanceof EngineError ? "Markdown operation failed: " + error.name : error.message;
   const payload = { error: { code: "vault_semantic." + code, message } };
-  return { content: [{ type: "text", text: JSON.stringify(payload) }], structuredContent: payload, isError: true };
+  return { content: [{ type: "text", text: JSON.stringify(payload) }], isError: true };
 }
 
 export function createVaultMcpServer(dependencies: VaultMcpServerDependencies, options: VaultMcpServerOptions = {}): McpServer {
@@ -112,9 +112,7 @@ export function createVaultMcpServer(dependencies: VaultMcpServerDependencies, o
           if (textOnly) return { content: [{ type: "text", text: JSON.stringify(output.parse(result)) }] };
           return { content: [], structuredContent: result as CallToolResult["structuredContent"] };
         } catch (error) {
-          const failure = semanticError(error, (args as { targetType?: unknown }).targetType) ?? mapError(error, args as z.infer<z.ZodObject<I>>);
-          if (textOnly) delete failure.structuredContent;
-          return failure;
+          return semanticError(error, (args as { targetType?: unknown }).targetType) ?? mapError(error, args as z.infer<z.ZodObject<I>>);
         }
       });
   }

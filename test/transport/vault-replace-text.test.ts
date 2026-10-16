@@ -5,6 +5,7 @@ import * as path from "node:path";
 import test, { type TestContext } from "node:test";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
+import { readToolError as error } from "./tool-error.js";
 import { computeContentVersion } from "../../src/core/version/content-version.js";
 import { MAX_TEXT_REPLACEMENT_INPUT_BYTES } from "../../src/core/mutation/prepare-text-replacement.js";
 
@@ -17,10 +18,6 @@ async function fixture(t: TestContext) {
   await client.connect(new StdioClientTransport({ command: process.execPath,
     args: [path.resolve(".test-dist/src/stdio-main.js")], env: { OBSIDIAN_VAULT_ROOT: vault }, stderr: "pipe" }));
   return { client, vault };
-}
-
-function error(result: { structuredContent?: unknown }) {
-  return (result.structuredContent as { error: { code: string; message: string; details?: Record<string, unknown> } }).error;
 }
 
 interface ObjectOutputSchema {
@@ -109,6 +106,7 @@ test("stdio replace-text rejects missing, coerced or extra inputs before any wri
   for (const args of invalid) {
     const result = await client.callTool({ name: "vault_replace_text", arguments: args });
     assert.equal(result.isError, true, JSON.stringify(args));
+    assert.equal(Object.hasOwn(result, "structuredContent"), false);
     assert.match(JSON.stringify(result.content), /Input validation error/u);
   }
   assert.equal(await readFile(file, "utf8"), source);
@@ -147,6 +145,7 @@ test("stdio replace-text is existing-only and enforces the combined UTF-8 input 
     path: "missing.md", oldText: "old", newText: "new", ifMatch: computeContentVersion("old"),
   } });
   assert.equal(missing.isError, true);
+  assert.equal(error(missing).code, "vault_read.not_found");
   assert.deepEqual(await readdir(vault), []);
   const file = path.join(vault, "note.md");
   await writeFile(file, "old");
