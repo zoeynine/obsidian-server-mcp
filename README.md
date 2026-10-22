@@ -161,22 +161,63 @@ and `tag_list` fail explicitly.
 
 ### Optional text-only reading
 
-An embedding host can enable `vault_read_text` by calling
-`createVaultMcpServer(dependencies, { enableTextRead: true })`. It uses the same
-reader, strict input schema, source limits, path policy, error mapping and
-exact-byte version as `vault_read`. It returns the same payload as JSON in one
-text block, omitting both `outputSchema` and `structuredContent`; successful
-payloads are still validated internally. Business errors retain `isError: true`.
-Chinese characters are emitted directly; JSON still escapes line breaks and
-literal backslashes.
+An embedding host can select a tool profile for each server instance:
 
-This option is off by default and is not exposed by the standard stdio entry.
-When enabled in a full deployment, the same authenticated MCP endpoint exposes
-15 tools. Every client discovering that endpoint can see the additional tool;
-existing tools retain their contracts. The host reuses its current dependencies
-and authorization gate, with no second Vault reader or upstream MCP connection.
-Disable the option to remove the additional tool. This is an opt-in read
-compatibility path; it does not change other tools' presentation or error handling.
+| Profile | Reading and navigation tools |
+| --- | --- |
+| `standard` (default) | `vault_read`, `vault_list`, `vault_get_document_map`, `search_query` |
+| `text` | `vault_read_text`, `vault_list_text`, `vault_get_document_map_text`, `search_query_text` |
+
+Each alias shares its original tool's strict input schema, use case, limits,
+path policy, error mapping and version semantics. In the text profile, all tools
+omit both `outputSchema` and `structuredContent`; successful payloads are still
+validated internally. Ordinary data, help and mutation receipts use compact JSON
+in one text block. Business errors retain `isError: true` and their existing
+payloads. Chinese characters are emitted directly.
+
+`vault_read_text` presents whole-file reads in two text blocks: the first contains
+all metadata (`path`, `version`, `tags`, `frontmatter`, `stat`) plus
+`textField: "content"`; the second is the original `content` string. Heading/block
+reads also use two blocks: `{path,version,textField:"result"}` and the reader's
+unchanged result string. Empty text remains an empty second block. No trimming,
+unescaping, newline conversion or code fences are applied. Frontmatter target
+reads retain single-block `{path,version,result}` JSON for every value type,
+including strings. Heading/block reads retain their existing semantic behavior,
+including relative heading levels; use a whole-file read for exact replacement.
+
+A full composition has 14 tools in either profile. The text profile replaces
+the four original names rather than adding duplicate choices. The other ten
+names and all operation semantics are shared. The standard profile's output
+formats remain unchanged; the standard stdio entry uses that default profile.
+Every client discovering an endpoint sees that endpoint's selected tool list.
+
+A host serving clients with different presentation needs can select fixed options
+by endpoint while sharing the same Vault dependencies and mutation store:
+
+```ts
+const standardServer = createVaultMcpServer(dependencies);
+const textServer = createVaultMcpServer(dependencies, {
+  toolProfile: "text",
+});
+```
+
+Use separate MCP server/transport instances for the endpoints. Register options
+are local to each instance; the standard instance neither lists nor accepts calls
+to the four aliases, and the text instance does not expose their four original
+names. The host owns HTTP routing, authentication and resource
+discovery; these options do not create routes or separate Vault permissions.
+Use the same loaded core module and shared store to retain in-process write
+coordination. No client-side hiding is needed. Binary delivery in the text profile
+places metadata JSON in the first text block, followed by the unchanged native
+image, embedded resource or resource link; attachment bytes are never serialized
+into the metadata. Reference queries use compact JSON like other data tools.
+Help and recovery instructions refer to the selected profile's available tool
+names; stable error codes are unchanged.
+
+For existing hosts, `enableTextRead: true` remains supported: with the default
+profile it adds only `vault_read_text`, giving a full composition 15 tools, and
+retains the original single-block JSON reading contract.
+The text profile already includes that tool and never registers it twice.
 
 ### On-demand help
 
@@ -195,6 +236,16 @@ help uses those bundled strings, so a deployed package needs no README file.
 
 List the Vault root with `vault_list({"path":""})`, or omit `path`. Paths are
 Vault-relative; `/` and `.` are not root aliases.
+
+If your endpoint exposes `vault_list_text`, `vault_read_text`,
+`vault_get_document_map_text` or `search_query_text`, these aliases accept the
+same inputs. Data tools return compact JSON; use the paths, heading keys and
+versions unchanged. A text-profile `vault_read_text` returns metadata JSON with
+`textField` in the first block and the corresponding raw text in the second:
+`content` for whole files, `result` for heading/block reads. Frontmatter targets
+remain single-block typed JSON. A legacy text-read-only host may still return
+the entire reading as single-block JSON. The instructions for the corresponding
+original tools also apply to the aliases.
 
 Whole-file reads return `path`, `content`, `tags`, parsed `frontmatter`,
 filesystem `stat`, and SHA-256 `version`. Targeted reads return

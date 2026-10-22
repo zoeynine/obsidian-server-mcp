@@ -27,9 +27,12 @@ export const MCP_SERVER_NAME = "obsidian-server-mcp";
 export const MCP_SERVER_VERSION = "0.1.0";
 export const OBSIDIAN_HELP_TOOL_NAME = "obsidian_help";
 export const SEARCH_QUERY_TOOL_NAME = "search_query";
+export const SEARCH_QUERY_TEXT_TOOL_NAME = "search_query_text";
 export const TAG_LIST_TOOL_NAME = "tag_list";
 export const VAULT_GET_DOCUMENT_MAP_TOOL_NAME = "vault_get_document_map";
+export const VAULT_GET_DOCUMENT_MAP_TEXT_TOOL_NAME = "vault_get_document_map_text";
 export const VAULT_LIST_TOOL_NAME = "vault_list";
+export const VAULT_LIST_TEXT_TOOL_NAME = "vault_list_text";
 export const VAULT_READ_TOOL_NAME = "vault_read";
 export const VAULT_READ_TEXT_TOOL_NAME = "vault_read_text";
 export const VAULT_WRITE_TOOL_NAME = "vault_write";
@@ -84,13 +87,15 @@ export interface VaultMcpServerDependencies {
 export interface VaultMcpServerOptions {
   /** Opt-in text-only reading; shares the existing reader and authorization boundary. */
   readonly enableTextRead?: boolean;
+  /** Present tool results as text, with raw read bodies and native attachment blocks. */
+  readonly toolProfile?: "standard" | "text";
 }
 
-function semanticError(error: unknown, targetType?: unknown): CallToolResult | undefined {
+function semanticError(error: unknown, targetType?: unknown, textProfile = false): CallToolResult | undefined {
   if (!(error instanceof VaultTextError || error instanceof VaultSemanticError || error instanceof EngineError)) return undefined;
   const code = error instanceof EngineError ? error.name : error.code;
   const message = error instanceof TargetNotFoundError && targetType === "heading"
-    ? 'Heading target or body block not found. Use the full heading path from the top level, e.g. ["Guide","Setup"], copying exact keys from vault_get_document_map. If within is set, also check its body-block index.'
+    ? `Heading target or body block not found. Use the full heading path from the top level, e.g. ["Guide","Setup"], copying exact keys from ${textProfile ? VAULT_GET_DOCUMENT_MAP_TEXT_TOOL_NAME : VAULT_GET_DOCUMENT_MAP_TOOL_NAME}. If within is set, also check its body-block index.`
     : error instanceof EngineError ? "Markdown operation failed: " + error.name : error.message;
   const payload = { error: { code: "vault_semantic." + code, message } };
   return { content: [{ type: "text", text: JSON.stringify(payload) }], isError: true };
@@ -98,10 +103,12 @@ function semanticError(error: unknown, targetType?: unknown): CallToolResult | u
 
 export function createVaultMcpServer(dependencies: VaultMcpServerDependencies, options: VaultMcpServerOptions = {}): McpServer {
   const server = new McpServer({ name: MCP_SERVER_NAME, version: MCP_SERVER_VERSION });
-  if (dependencies.referenceQuery) registerReferenceQuery(server, dependencies.referenceQuery);
+  const textProfile = options.toolProfile === "text";
+  if (dependencies.referenceQuery) registerReferenceQuery(server, dependencies.referenceQuery, textProfile);
   function register<I extends z.ZodRawShape>(name: string, description: string, input: z.ZodObject<I>, output: z.ZodType,
     run: (args: z.infer<z.ZodObject<I>>) => Promise<unknown>, mapError: (error: unknown, args: z.infer<z.ZodObject<I>>) => CallToolResult,
-    mutation?: { readonly destructive: boolean; readonly idempotent: boolean }, textOnly = false): void {
+    mutation?: { readonly destructive: boolean; readonly idempotent: boolean }, textOnly = textProfile,
+    present?: (result: unknown, args: z.infer<z.ZodObject<I>>) => CallToolResult): void {
     server.registerTool(name, { description, inputSchema: input, ...(textOnly ? {} : { outputSchema: output }),
       annotations: { readOnlyHint: mutation === undefined, destructiveHint: mutation?.destructive ?? false,
         idempotentHint: mutation?.idempotent ?? true, openWorldHint: false } },
@@ -109,41 +116,77 @@ export function createVaultMcpServer(dependencies: VaultMcpServerDependencies, o
         try {
           const result = await run(args as z.infer<z.ZodObject<I>>);
           // Keep output validation even though the compatibility tool advertises no output schema.
-          if (textOnly) return { content: [{ type: "text", text: JSON.stringify(output.parse(result)) }] };
+          if (textOnly) {
+            const validated = output.parse(result);
+            return present ? present(validated, args as z.infer<z.ZodObject<I>>)
+              : { content: [{ type: "text", text: JSON.stringify(validated) }] };
+          }
           return { content: [], structuredContent: result as CallToolResult["structuredContent"] };
         } catch (error) {
-          return semanticError(error, (args as { targetType?: unknown }).targetType) ?? mapError(error, args as z.infer<z.ZodObject<I>>);
+          return semanticError(error, (args as { targetType?: unknown }).targetType, textProfile) ?? mapError(error, args as z.infer<z.ZodObject<I>>);
         }
       });
   }
   register(OBSIDIAN_HELP_TOOL_NAME, "Usage manual; omit topic for the topic index.",
     z.object({ topic: z.string().optional() }).strict(), z.object({ text: z.string() }).strict(),
-    async ({topic}) => readObsidianHelp(topic), mapObsidianHelpError);
-  register(VAULT_LIST_TOOL_NAME, 'List a Vault directory; omit path or use "" for root. Directory names end in /. Protected/symlink entries are omitted; overflow errors, never truncation.',
-    z.object({ path: z.string().optional(),
-      maxEntries: z.number().int().min(1).max(MAX_VAULT_LIST_ENTRIES).optional() }).strict(),
-    z.object({ files: z.array(z.string()) }).strict(),
-    ({path, maxEntries}) => dependencies.listEntries(path ?? "", maxEntries === undefined ? {} : {maxEntries}), mapVaultListToolError);
+    async ({topic}) => {
+      const help = readObsidianHelp(topic);
+      return textProfile ? { text: withTextToolNames(help.text) } : help;
+    }, mapObsidianHelpError);
+  const listInput = z.object({ path: z.string().optional(),
+    maxEntries: z.number().int().min(1).max(MAX_VAULT_LIST_ENTRIES).optional() }).strict();
+  const listOutput = z.object({ files: z.array(z.string()) }).strict();
+  const runList = ({path, maxEntries}: z.infer<typeof listInput>) =>
+    dependencies.listEntries(path ?? "", maxEntries === undefined ? {} : {maxEntries});
+  if (!textProfile) {
+    register(VAULT_LIST_TOOL_NAME, 'List a Vault directory; omit path or use "" for root. Directory names end in /. Protected/symlink entries are omitted; overflow errors, never truncation.',
+      listInput, listOutput, runList, mapVaultListToolError);
+  } else {
+    register(VAULT_LIST_TEXT_TOOL_NAME, "List a Vault directory as text-only JSON. Same inputs, path rules and entry limits as vault_list; directory names end in /. Overflow errors, never truncation.",
+      listInput, listOutput, runList, mapVaultListToolError, undefined, true);
+  }
   const runRead = ({path, ...readOptions}: z.infer<typeof readInput>) =>
     dependencies.readDocument(path, defined(readOptions) as ReadVaultNoteOptions);
-  register(VAULT_READ_TOOL_NAME, "Read a Vault text file or target with its version. Discover targets via vault_get_document_map; targeted heading levels are relative. No link graph.",
-    readInput, readOutput, runRead, mapVaultReadToolError);
-  if (options.enableTextRead === true) {
-    register(VAULT_READ_TEXT_TOOL_NAME, "Read a Vault text file or target as text-only JSON. Same inputs, read limits and exact-byte version as vault_read. Discover targets via vault_get_document_map; targeted heading levels are relative.",
-      readInput, readOutput, runRead, mapVaultReadToolError, undefined, true);
+  if (!textProfile) {
+    register(VAULT_READ_TOOL_NAME, "Read a Vault text file or target with its version. Discover targets via vault_get_document_map; targeted heading levels are relative. No link graph.",
+      readInput, readOutput, runRead, mapVaultReadToolError);
   }
-  register(VAULT_GET_DOCUMENT_MAP_TOOL_NAME, "Get heading paths, block IDs, property names and exact-byte version. Copy returned keys unchanged for targeted reads/patches.",
-    z.object({ path: z.string(), maxBytes, maxHeadings: z.number().int().min(1).max(MAX_DOCUMENT_MAP_HEADINGS).optional() }).strict(),
-    z.object({ path: z.string(), version, headings: headingTree, blocks: z.array(z.string()), frontmatterFields: z.array(z.string()) }).strict(),
-    ({path, ...options}) => dependencies.getDocumentMap(path, defined(options) as GetVaultDocumentMapOptions), (error, args) => mapVaultDocumentMapToolError(error, args.path));
-  register(SEARCH_QUERY_TOOL_NAME, "Query Markdown with JsonLogic over path, content, tags, frontmatter and stat. Returns truthy values. Only scope limits the scan; query path/glob conditions only filter results. Overflow errors, never truncation. No link graph.",
-    z.object({ ...scanShape, query: z.record(z.string(), z.json()),
-      scope: z.object({ directory: z.string(), recursive: z.boolean() }).strict().optional()
-        .describe('Optional scan scope; omit for a recursive whole-Vault scan. directory "" is root; recursive=false scans only direct child files.'),
-      maxResults: z.number().int().min(1).max(MAX_SEARCH_QUERY_RESULTS).optional()
-        .describe("Optional match cap, not truncation; omit for defaults.") }).strict(),
-    z.object({ results: z.array(z.object({ filename: z.string(), version, result: z.json() }).strict()) }).strict(),
-    async ({query, ...options}) => ({ results: await dependencies.searchQuery(query, defined(options) as SearchVaultQueryOptions) }), mapSearchQueryToolError);
+  if (textProfile || options.enableTextRead === true) {
+    register(VAULT_READ_TEXT_TOOL_NAME, textProfile
+      ? "Read a Vault text file or target. Full-file and heading/block reads return two text blocks: metadata JSON with textField naming content/result, then the unchanged reader text. Frontmatter values remain single-block typed JSON. Same read limits and exact-byte version; use version as ifMatch. Discover targets via vault_get_document_map_text; targeted heading levels are relative, so copy exact replacement text from a full-file read."
+      : `Read a Vault text file or target as text-only JSON. Same inputs, read limits and exact-byte version as vault_read. Discover targets via ${VAULT_GET_DOCUMENT_MAP_TOOL_NAME}; targeted heading levels are relative.`,
+      readInput, readOutput, runRead, mapVaultReadToolError, undefined, true,
+      textProfile ? (result, args) => presentReadText(result as z.infer<typeof readOutput>, args.targetType) : undefined);
+  }
+  const documentMapInput = z.object({ path: z.string(), maxBytes,
+    maxHeadings: z.number().int().min(1).max(MAX_DOCUMENT_MAP_HEADINGS).optional() }).strict();
+  const documentMapOutput = z.object({ path: z.string(), version, headings: headingTree,
+    blocks: z.array(z.string()), frontmatterFields: z.array(z.string()) }).strict();
+  const runDocumentMap = ({path, ...mapOptions}: z.infer<typeof documentMapInput>) =>
+    dependencies.getDocumentMap(path, defined(mapOptions) as GetVaultDocumentMapOptions);
+  const mapDocumentMapError = (error: unknown, args: z.infer<typeof documentMapInput>) => mapVaultDocumentMapToolError(error, args.path);
+  if (!textProfile) {
+    register(VAULT_GET_DOCUMENT_MAP_TOOL_NAME, "Get heading paths, block IDs, property names and exact-byte version. Copy returned keys unchanged for targeted reads/patches.",
+      documentMapInput, documentMapOutput, runDocumentMap, mapDocumentMapError);
+  } else {
+    register(VAULT_GET_DOCUMENT_MAP_TEXT_TOOL_NAME, "Get heading paths, block IDs, property names and exact-byte version as text-only JSON. Same inputs and limits as vault_get_document_map. Copy returned keys unchanged for targeted reads/patches.",
+      documentMapInput, documentMapOutput, runDocumentMap, mapDocumentMapError, undefined, true);
+  }
+  const searchInput = z.object({ ...scanShape, query: z.record(z.string(), z.json()),
+    scope: z.object({ directory: z.string(), recursive: z.boolean() }).strict().optional()
+      .describe('Optional scan scope; omit for a recursive whole-Vault scan. directory "" is root; recursive=false scans only direct child files.'),
+    maxResults: z.number().int().min(1).max(MAX_SEARCH_QUERY_RESULTS).optional()
+      .describe("Optional match cap, not truncation; omit for defaults.") }).strict();
+  const searchOutput = z.object({ results: z.array(z.object({ filename: z.string(), version, result: z.json() }).strict()) }).strict();
+  const runSearch = async ({query, ...searchOptions}: z.infer<typeof searchInput>) =>
+    ({ results: await dependencies.searchQuery(query, defined(searchOptions) as SearchVaultQueryOptions) });
+  if (!textProfile) {
+    register(SEARCH_QUERY_TOOL_NAME, "Query Markdown with JsonLogic over path, content, tags, frontmatter and stat. Returns truthy values. Only scope limits the scan; query path/glob conditions only filter results. Overflow errors, never truncation. No link graph.",
+      searchInput, searchOutput, runSearch, mapSearchQueryToolError);
+  } else {
+    register(SEARCH_QUERY_TEXT_TOOL_NAME, "Query Markdown as text-only JSON. Same inputs, truthy results, scope and scan/output limits as search_query. Overflow errors, never truncation. No link graph.",
+      searchInput, searchOutput, runSearch, mapSearchQueryToolError, undefined, true);
+  }
   register(TAG_LIST_TOOL_NAME, "List tags and parent tags with per-file counts; names omit #. Scan/result limits fail explicitly. Inline recognition may differ from Obsidian Desktop.",
     z.object({ ...scanShape, maxTags: z.number().int().min(1).max(MAX_TAG_LIST_TAGS).optional()
       .describe("Optional unique-tag cap including parents; omit for defaults.") }).strict(),
@@ -164,7 +207,7 @@ export function createVaultMcpServer(dependencies: VaultMcpServerDependencies, o
       textInput, mutationOutput,
       ({ path, content, ifMatch }) => mutations.append(path, content, ifMatch === undefined ? {} : { ifMatch }),
       (error, args) => mapVaultMutationToolError(error, args.path), { destructive: false, idempotent: false });
-    register(VAULT_REPLACE_TEXT_TOOL_NAME, "Replace one unique, case-sensitive literal match in an existing UTF-8 file. Copy exact oldText and version from a whole-file vault_read; pass version as ifMatch. Empty newText deletes. No automatic retry.",
+    register(VAULT_REPLACE_TEXT_TOOL_NAME, `Replace one unique, case-sensitive literal match in an existing UTF-8 file. Copy exact oldText and version from a whole-file ${textProfile ? VAULT_READ_TEXT_TOOL_NAME : VAULT_READ_TOOL_NAME}; pass version as ifMatch. Empty newText deletes. No automatic retry.`,
       z.object({ path: z.string(), oldText: z.string().max(MAX_TEXT_REPLACEMENT_INPUT_BYTES),
         newText: z.string().max(MAX_TEXT_REPLACEMENT_INPUT_BYTES), ifMatch: version }).strict(),
       mutationOutput.extend({ replacementCount: z.literal(1) }).strict(),
@@ -202,8 +245,32 @@ export function createVaultMcpServer(dependencies: VaultMcpServerDependencies, o
       ({ path, ...options }) => mutations.delete(path, defined(options)),
       (error, args) => mapVaultMutationToolError(error, args.path), { destructive: true, idempotent: false });
   }
-  if (dependencies.readBinary) registerVaultBinaryTool(server, dependencies.readBinary, dependencies.createBinaryLink);
+  if (dependencies.readBinary) registerVaultBinaryTool(server, dependencies.readBinary, dependencies.createBinaryLink, textProfile);
   return server;
+}
+
+function presentReadText(result: z.infer<typeof readOutput>, targetType?: string): CallToolResult {
+  if ("content" in result) {
+    const { content, ...metadata } = result;
+    return { content: [
+      { type: "text", text: JSON.stringify({ ...metadata, textField: "content" }) },
+      { type: "text", text: content },
+    ] };
+  }
+  if ((targetType === "heading" || targetType === "block") && typeof result.result === "string") {
+    const { result: body, ...metadata } = result;
+    return { content: [
+      { type: "text", text: JSON.stringify({ ...metadata, textField: "result" }) },
+      { type: "text", text: body },
+    ] };
+  }
+  return { content: [{ type: "text", text: JSON.stringify(result) }] };
+}
+
+function withTextToolNames(text: string): string {
+  // Rewrite only complete tool names, preserving existing aliases and dotted error codes.
+  return text.replace(/\b(?:vault_list|vault_read|vault_get_document_map|search_query)\b(?!\.[A-Za-z0-9_])/gu,
+    name => name + "_text");
 }
 
 function defined(value: Record<string, unknown>): Record<string, unknown> {

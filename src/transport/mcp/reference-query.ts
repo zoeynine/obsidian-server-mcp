@@ -13,19 +13,24 @@ const occurrence = z.object({ source: z.object({ path: z.string(), version: z.st
   raw: z.string(), href: z.string(), syntax: z.enum(["wikilink", "markdown"]), embed: z.boolean(), unsupported: z.string().optional(),
   status: z.enum(["resolved", "ambiguous", "unresolved", "unsupported", "unknown"]), reason: z.string(),
   destination: target.optional(), candidates: z.array(z.string()).optional() }).strict();
+const output = z.object({ target: target.extend({ fileExists: z.boolean(), status: z.enum(["resolved", "ambiguous", "unresolved", "unsupported", "unknown"]), reason: z.string(), version: z.string().optional() }).strict(), scope, resolutionScope: scope,
+  coverage: z.object({ complete: z.literal(true), incomingOutsideScope: z.literal("unknown"), atomicSnapshot: z.literal(false),
+    offsetUnit: z.literal("utf16"), positionBase: z.literal(1), sourcesScanned: z.number().int().nonnegative(),
+    entriesVisited: z.number().int().nonnegative(), bytesRead: z.number().int().nonnegative(), excluded: z.array(z.string()) }).strict(),
+  matches: z.array(occurrence), uncertain: z.array(occurrence) }).strict();
 
-export function registerReferenceQuery(server: McpServer, run: ReferenceQueryUseCase): void {
+export function registerReferenceQuery(server: McpServer, run: ReferenceQueryUseCase, textOnly = false): void {
   server.registerTool(REFERENCE_QUERY_TOOL_NAME, {
     description: "Find references to a file/heading/block within explicit source and resolution scopes. Read-only; returns matches plus uncertainties and exact source versions. Outside-scope incoming links remain unknown. See help topic references.",
     inputSchema: z.object({ scope, target, resolutionScope: scope.optional(), ...limits }).strict(),
-    outputSchema: z.object({ target: target.extend({ fileExists: z.boolean(), status: z.enum(["resolved", "ambiguous", "unresolved", "unsupported", "unknown"]), reason: z.string(), version: z.string().optional() }).strict(), scope, resolutionScope: scope,
-      coverage: z.object({ complete: z.literal(true), incomingOutsideScope: z.literal("unknown"), atomicSnapshot: z.literal(false),
-        offsetUnit: z.literal("utf16"), positionBase: z.literal(1), sourcesScanned: z.number().int().nonnegative(),
-        entriesVisited: z.number().int().nonnegative(), bytesRead: z.number().int().nonnegative(), excluded: z.array(z.string()) }).strict(),
-      matches: z.array(occurrence), uncertain: z.array(occurrence) }).strict(),
+    ...(textOnly ? {} : { outputSchema: output }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   }, async (args): Promise<CallToolResult> => {
-    try { return { content: [], structuredContent: await run(args as unknown as ReferenceQueryInput) as unknown as Record<string, unknown> }; }
+    try {
+      const result = await run(args as unknown as ReferenceQueryInput);
+      if (textOnly) return { content: [{ type: "text", text: JSON.stringify(output.parse(result)) }] };
+      return { content: [], structuredContent: result as unknown as Record<string, unknown> };
+    }
     catch (error) {
       const payload = error instanceof ReferenceQueryError ? { error: { code: `reference_query.${error.code}`, message: error.message } }
         : toKnownVaultReadToolErrorPayload(error) ?? { error: { code: "reference_query.internal_error", message: "reference_query failed unexpectedly" } };

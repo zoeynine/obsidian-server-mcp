@@ -37,15 +37,19 @@ const output = z.discriminatedUnion("delivery", [
 ]);
 
 export function registerVaultBinaryTool(
-  server: McpServer, readBinary: VaultBinaryReadUseCase, createLink?: VaultBinaryLinkProvider,
+  server: McpServer, readBinary: VaultBinaryReadUseCase, createLink?: VaultBinaryLinkProvider, textOnly = false,
 ): void {
   server.registerTool(VAULT_READ_BINARY_TOOL_NAME, {
     description: "Read images and non-PDF attachments. auto: raster preview or signed HTTPS download link. bytes: original data up to 4 MiB. PDF is unsupported in every mode; use the client's native file upload/attachments.",
     inputSchema: z.object({ path: z.string(), as: z.enum(["auto", "bytes", "link"]).optional() }).strict(),
-    outputSchema: output,
+    ...(textOnly ? {} : { outputSchema: output }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   }, async ({ path, as }): Promise<CallToolResult> => {
-    try { return await binaryToolResult(await readBinary(path, as === undefined ? {} : { as }), createLink); }
+    try {
+      const result = await binaryToolResult(await readBinary(path, as === undefined ? {} : { as }), createLink);
+      if (textOnly) return { content: [{ type: "text", text: JSON.stringify(output.parse(result.structuredContent)) }, ...result.content] };
+      return result;
+    }
     catch (error) { return mapVaultBinaryError(error); }
   });
 

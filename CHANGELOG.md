@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Add per-instance standard and text tool profiles for hosts serving clients
+  with different result presentation needs. Both profiles expose 14 tools;
+  the text profile replaces four read/navigation names with their text aliases.
+- Present text-profile data and mutation receipts as compact JSON text, and
+  Markdown reads as metadata plus a separate unchanged text body. Preserve
+  typed frontmatter values and native image/resource/link blocks.
+- Keep standard stdio output and the legacy `enableTextRead` single-block JSON
+  contract unchanged, with shared validation, version checks and mutation rules.
+
 ## 0.1.0 - 2026-10-03
 
 First versioned source release of Obsidian Server MCP.

@@ -39,11 +39,29 @@ messages and optional details. They omit structuredContent so clients do not val
 the error body against a success output schema; unexpected exceptions are sanitized.
 SDK input/protocol errors remain SDK errors.
 
-An embedding host may opt into the vault_read_text compatibility tool
-with createVaultMcpServer(dependencies, { enableTextRead: true }). It shares the
-vault_read input schema, reader and error mapping, validates successful output
-internally, and emits text-only JSON without outputSchema or structuredContent.
-The default tool set and standard stdio entry remain unchanged.
+An embedding host may choose toolProfile: "text" in createVaultMcpServer's
+second argument. This replaces vault_read / vault_list / vault_get_document_map /
+search_query with their corresponding *_text names. Each alias shares its
+original tool's schemas, use case and error mapping. All text-profile tools
+validate successful output internally and omit outputSchema/structuredContent.
+Ordinary data, help and mutation receipts emit compact JSON. Whole-file reads
+emit metadata with textField: "content", followed by an unchanged raw text block;
+heading/block reads use textField: "result" with the unchanged semantic reader
+text. Empty bodies retain the second block. All frontmatter target values keep
+single-block typed JSON. Binary metadata becomes a leading JSON text block while
+native image/resource/resource_link blocks are retained. Both profiles expose
+14 tools in a full composition, sharing names for ten tools and all operation
+semantics. The standard profile's output contracts remain unchanged.
+The standard stdio entry keeps the default profile. The existing enableTextRead
+option remains compatible: it adds vault_read_text to the standard profile only,
+giving 15 tools with the legacy single-block JSON reading contract, and does not
+duplicate it in the text profile.
+
+Options belong to each MCP server instance. A remote host can use fixed options
+for separate endpoints, sharing one dependencies object and mutation store while
+creating independent servers/transports. Each endpoint neither lists nor accepts
+calls to the four names reserved for the other profile. Routing, OAuth discovery and authorization
+remain host responsibilities; tool presentation is not a Vault permission boundary.
 
 Core owns exact-byte ifMatch, per-path serialization, guarded sibling temporary
 files, final revalidation, atomic publication and cleanup. No automatic mutation retry,

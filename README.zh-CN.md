@@ -32,10 +32,20 @@
 
 其中 `vault_patch`、引用查询、binary delivery、错误语义和预算限制等完整说明都在英文 README 与 `docs/` 中。
 
-嵌入式宿主可通过 `createVaultMcpServer(dependencies, { enableTextRead: true })`
-额外启用 `vault_read_text`，复用原读取能力，以 text-only JSON 返回相同内容与版本。
-它不声明 `outputSchema`、不返回 `structuredContent`，适用于需要纯文本结果的客户端。
-默认关闭，标准 stdio 入口不启用；原 14 个工具的行为保持不变。
+嵌入式宿主可通过实例选项 `toolProfile: "text"`，将读取、目录、文档结构和搜索
+四个工具替换为 `vault_read_text`、`vault_list_text`、
+`vault_get_document_map_text` 和 `search_query_text`。这些别名复用原工具的输入、
+限制和业务逻辑。text 配置的所有工具都不声明 `outputSchema`、不返回
+`structuredContent`，成功结果仍在内部校验；普通数据、帮助和写入回执使用紧凑 JSON。
+全文读取分为两个 text 块：第一块是完整元数据与 `textField: "content"`，第二块直接放原样正文。
+heading/block 定向读取对应 `textField: "result"`，保留原有语义与相对标题层级；
+frontmatter 定向读取的所有类型（包括字符串）保持单块 JSON。空正文也保留第二块。
+图片、附件保留原生内容块，其元数据移到首个 JSON text 块。
+默认 `standard` 和 `text` 配置都保留 14 个工具，操作语义相同，无需客户端手动关闭重复项；standard 输出格式保持原样。
+宿主可让不同入口分别使用两种配置，共用同一份 Vault 依赖与写入 store；
+HTTP 路由和认证由外部适配器负责。标准 stdio 使用默认配置。
+既有 `enableTextRead: true` 保持兼容，可在默认配置下单独追加正文读取工具并保留单块 JSON 契约；
+在 text 配置下不会重复注册。
 详见 [可选文本读取](README.md#optional-text-only-reading)。
 
 ## 快速开始
