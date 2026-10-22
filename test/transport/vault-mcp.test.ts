@@ -1,5 +1,5 @@
 import { readVaultNote } from "../../src/core/document/read-vault-note.js";
-import { VaultDocumentTooLargeError } from "../../src/core/file/read-vault-document.js";
+import { DEFAULT_MAX_VAULT_DOCUMENT_BYTES, VaultDocumentTooLargeError } from "../../src/core/file/read-vault-document.js";
 import * as assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -113,18 +113,18 @@ test("whole-file and targeted reads recover using the exact source byte size", a
     });
     assert.equal(rejected.isError, true);
     const payload = readToolErrorPayload(rejected) as { error: {
-      code: string; message: string; details: { path: string; maxBytes: number; observedSizeBytes: string };
+      code: string; message: string; details: { path: string; maxBytes: number; observedSizeBytes: number };
     } };
     assert.equal(payload.error.code, "vault_read.too_large");
     assert.deepEqual(payload.error.details, { path: "bounded.md",
-      maxBytes: bytes.byteLength - 1, observedSizeBytes: String(bytes.byteLength),
+      maxBytes: bytes.byteLength - 1, observedSizeBytes: bytes.byteLength,
     });
     assert.match(payload.error.message, /maxBytes limits the entire source file, not the selected target/u);
     assert.match(payload.error.message, /retry with maxBytes >= observedSizeBytes/u);
     assertDoesNotLeakRootOrStack(rejected, harness.vault);
 
     const recovered = await harness.client.callTool({ name: VAULT_READ_TOOL_NAME,
-      arguments: { path: "bounded.md", ...selection, maxBytes: Number(payload.error.details.observedSizeBytes) },
+      arguments: { path: "bounded.md", ...selection, maxBytes: payload.error.details.observedSizeBytes },
     });
     assert.notEqual(recovered.isError, true, JSON.stringify(recovered));
     assert.deepEqual(recovered.content, []);
@@ -138,23 +138,50 @@ test("whole-file and targeted reads recover using the exact source byte size", a
   }
 });
 
-test("vault_read does not suggest an impossible retry beyond the source hard cap", async (t) => {
-  const observedSizeBytes = BigInt(MAX_VAULT_DOCUMENT_BYTES) + 1n;
-  const harness = await createHarness(t, { readDocument: async (inputPath) => {
-    throw new VaultDocumentTooLargeError(inputPath, observedSizeBytes, MAX_VAULT_DOCUMENT_BYTES);
+test("vault_read size errors distinguish recoverable budgets, the hard cap and safe-integer boundaries", async (t) => {
+  let observedSizeBytes = 0n;
+  const harness = await createHarness(t, { readDocument: async (inputPath, options) => {
+    throw new VaultDocumentTooLargeError(inputPath, observedSizeBytes, options?.maxBytes ?? DEFAULT_MAX_VAULT_DOCUMENT_BYTES);
   } });
-  const result = await harness.client.callTool({ name: VAULT_READ_TOOL_NAME,
-    arguments: { path: "oversized.md", maxBytes: MAX_VAULT_DOCUMENT_BYTES },
-  });
-  assert.equal(result.isError, true);
-  const payload = readToolErrorPayload(result) as { error: { code: string; message: string; details: unknown } };
-  assert.equal(payload.error.code, "vault_read.too_large");
-  assert.deepEqual(payload.error.details, { path: "oversized.md",
-    maxBytes: MAX_VAULT_DOCUMENT_BYTES, observedSizeBytes: observedSizeBytes.toString(),
-  });
-  assert.match(payload.error.message, /maxBytes limits the entire source file/u);
-  assert.match(payload.error.message, /exceeds the 67108864-byte maximum supported source size/u);
-  assert.doesNotMatch(payload.error.message, /retry with/u);
+  for (const [maxBytes, observed, expectedSize, recoverable] of [
+    [undefined, BigInt(DEFAULT_MAX_VAULT_DOCUMENT_BYTES) + 1n, DEFAULT_MAX_VAULT_DOCUMENT_BYTES + 1, true],
+    [3235, 3236n, 3236, true],
+    [MAX_VAULT_DOCUMENT_BYTES - 1, BigInt(MAX_VAULT_DOCUMENT_BYTES), MAX_VAULT_DOCUMENT_BYTES, true],
+    [MAX_VAULT_DOCUMENT_BYTES, BigInt(MAX_VAULT_DOCUMENT_BYTES) + 1n, MAX_VAULT_DOCUMENT_BYTES + 1, false],
+    [MAX_VAULT_DOCUMENT_BYTES, BigInt(Number.MAX_SAFE_INTEGER), Number.MAX_SAFE_INTEGER, false],
+    [MAX_VAULT_DOCUMENT_BYTES, BigInt(Number.MAX_SAFE_INTEGER) + 1n, "9007199254740992", false],
+    [MAX_VAULT_DOCUMENT_BYTES, BigInt(Number.MAX_SAFE_INTEGER) + 2n, "9007199254740993", false],
+  ] as const) {
+    observedSizeBytes = observed;
+    const result = await harness.client.callTool({ name: VAULT_READ_TOOL_NAME,
+      arguments: { path: "oversized.md", ...(maxBytes === undefined ? {} : { maxBytes }) },
+    });
+    const error = readToolError(result);
+    assert.equal(error.code, "vault_read.too_large");
+    const details = error.details;
+    assert.ok(details);
+    assert.deepEqual(details, { path: "oversized.md", maxBytes: maxBytes ?? DEFAULT_MAX_VAULT_DOCUMENT_BYTES,
+      ...(typeof expectedSize === "number" ? { observedSizeBytes: expectedSize } : { observedSizeBytesExact: expectedSize }),
+    });
+    assert.equal(Object.hasOwn(details, "observedSizeBytes"), typeof expectedSize === "number");
+    assert.equal(Object.hasOwn(details, "observedSizeBytesExact"), typeof expectedSize === "string");
+    if (typeof expectedSize === "number") {
+      assert.ok("observedSizeBytes" in details);
+      assert.equal(Number.isSafeInteger(details["observedSizeBytes"]), true);
+      assert.match(error.message, /maxBytes limits the entire source file/u);
+    } else {
+      assert.match(error.message, /safe integer range/u);
+      assert.match(error.message, /observedSizeBytesExact/u);
+      assert.match(error.message, /Increasing the read limit cannot recover/u);
+    }
+    if (recoverable) {
+      assert.match(error.message, /retry with maxBytes >= observedSizeBytes/u);
+    } else {
+      assert.match(error.message, /exceeds the 67108864-byte maximum supported source size/u);
+      assert.doesNotMatch(error.message, /retry with|retry the same request/u);
+    }
+    assertDoesNotLeakRootOrStack(result, harness.vault);
+  }
 });
 
 test("read and document-map tools advertise and accept the shared inclusive byte cap", async (t) => {

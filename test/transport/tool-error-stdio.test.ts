@@ -70,7 +70,13 @@ test("stdio wire errors omit structuredContent while mutation success still matc
   assert.equal(bounded.code, "vault_read.too_large");
   assert.match(bounded.message, /maxBytes limits the entire source file/u);
   assert.deepEqual(bounded.details, { path: "note.md", maxBytes: 1,
-    observedSizeBytes: String(Buffer.byteLength(source)) });
+    observedSizeBytes: Buffer.byteLength(source) });
+  assert.ok(bounded.details);
+  const recovered = await call("vault_read", { path: "note.md", maxBytes: bounded.details["observedSizeBytes"] });
+  assert.notEqual(recovered.isError, true);
+  const body = recovered.structuredContent;
+  assert.ok(body && typeof body === "object" && "content" in body);
+  assert.equal(body.content, source);
   for (const error of [missingVersion, missingHeading, stale, bounded]) {
     assert.equal(JSON.stringify(error).includes(vault), false);
     assert.doesNotMatch(JSON.stringify(error), /"stack"|node_modules/u);

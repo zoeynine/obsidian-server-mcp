@@ -13,6 +13,8 @@ import {
   type VaultPathErrorCode,
 } from "../../core/path/vault-path.js";
 
+const MAX_SAFE_SIZE_BYTES = BigInt(Number.MAX_SAFE_INTEGER);
+
 export type VaultReadToolErrorCode =
   | `vault_path.${VaultPathErrorCode}`
   | `vault_read.${VaultDocumentReadError["code"]}`
@@ -49,7 +51,7 @@ export function mapVaultReadToolError(error: unknown): CallToolResult {
     },
   };
 
-  if (error instanceof VaultDocumentTooLargeError) {
+  if (error instanceof VaultDocumentTooLargeError && error.observedSizeBytes <= MAX_SAFE_SIZE_BYTES) {
     const recovery = error.observedSizeBytes <= BigInt(MAX_VAULT_DOCUMENT_BYTES)
       ? `retry with maxBytes >= observedSizeBytes (${error.observedSizeBytes}), up to ${MAX_VAULT_DOCUMENT_BYTES} bytes.`
       : `observedSizeBytes (${error.observedSizeBytes}) exceeds the ${MAX_VAULT_DOCUMENT_BYTES}-byte maximum supported source size.`;
@@ -86,7 +88,9 @@ export function toKnownVaultReadToolErrorPayload(
       error: {
         code: `vault_read.${error.code}`,
         details: readErrorDetails(error),
-        message: error.message,
+        message: error instanceof VaultDocumentTooLargeError && error.observedSizeBytes > MAX_SAFE_SIZE_BYTES
+          ? `${error.message}. Source size (${error.observedSizeBytes}) exceeds the ${MAX_VAULT_DOCUMENT_BYTES}-byte maximum supported source size and the safe integer range; see observedSizeBytesExact. Increasing the read limit cannot recover this error.`
+          : error.message,
       },
     };
   }
@@ -117,7 +121,12 @@ function readErrorDetails(
 
   if (error instanceof VaultDocumentTooLargeError) {
     details["maxBytes"] = error.maxBytes;
-    details["observedSizeBytes"] = error.observedSizeBytes.toString();
+    // Filesystem sizes are nonnegative. Compare as bigint before converting.
+    if (error.observedSizeBytes <= MAX_SAFE_SIZE_BYTES) {
+      details["observedSizeBytes"] = Number(error.observedSizeBytes);
+    } else {
+      details["observedSizeBytesExact"] = error.observedSizeBytes.toString();
+    }
   } else if (error instanceof VaultDocumentNotRegularFileError) {
     details["actualType"] = error.actualType;
   } else if (error instanceof InvalidVaultDocumentEncodingError) {

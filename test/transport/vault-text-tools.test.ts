@@ -10,6 +10,7 @@ import {
   listVaultFiles, listVaultTags, queryReferences, readVaultBinary, readVaultDocument,
   readVaultNote, searchVaultQuery, type ReadVaultDocumentOptions,
 } from "../../src/core/index.js";
+import { VaultDocumentTooLargeError } from "../../src/core/file/read-vault-document.js";
 import {
   createVaultMcpServer, type VaultMcpServerDependencies, type VaultMcpServerOptions,
 } from "../../src/transport/mcp/server.js";
@@ -83,7 +84,7 @@ async function fixture(t: TestContext) {
   }
   const standard = await openServer();
   const compatibility = await openServer({ toolProfile: "text" });
-  return { root, vault, standard, compatibility, openServer };
+  return { root, vault, standard, compatibility, mutations: dependencies.mutations!, openServer };
 }
 
 function textPayload(result: ToolResult): unknown {
@@ -559,6 +560,60 @@ test("text navigation preserves real path, budget and business errors", async t 
     assert.deepEqual(error, readToolErrorPayload(canonical));
     assertSafeResult(text, f.root);
   }
+});
+
+test("numeric and exact size errors pass through every tool mapper in both profiles", async t => {
+  const f = await fixture(t);
+  let observedSizeBytes = 0n;
+  const fail = async (): Promise<never> => { throw new VaultDocumentTooLargeError(notePath, observedSizeBytes, 1); };
+  t.mock.method(f.mutations, "append", fail);
+  const overrides = {
+    readDocument: fail, getDocumentMap: fail, searchQuery: fail, tagList: fail, referenceQuery: fail, readBinary: fail,
+  };
+  const standard = await f.openServer({ enableTextRead: true }, overrides);
+  const text = await f.openServer({ toolProfile: "text" }, overrides);
+  for (const [observed, expectedSize] of [
+    [3236n, 3236],
+    [67108865n, 67108865],
+    [BigInt(Number.MAX_SAFE_INTEGER), Number.MAX_SAFE_INTEGER],
+    [BigInt(Number.MAX_SAFE_INTEGER) + 1n, "9007199254740992"],
+    [BigInt(Number.MAX_SAFE_INTEGER) + 2n, "9007199254740993"],
+  ] as const) {
+    observedSizeBytes = observed;
+    for (const [name, textName, args, code] of [
+      ["vault_read", "vault_read_text", { path: notePath, maxBytes: 1 }, "vault_read.too_large"],
+      ["vault_get_document_map", "vault_get_document_map_text", { path: notePath, maxBytes: 1 }, "vault_read.too_large"],
+      ["search_query", "search_query_text", { query: { var: "path" } }, "vault_read.too_large"],
+      ["tag_list", "tag_list", {}, "vault_read.too_large"],
+      ["reference_query", "reference_query", { scope: { directory, recursive: false }, target: { path: notePath } }, "vault_read.too_large"],
+      ["vault_read_binary", "vault_read_binary", { path: notePath, as: "bytes" }, "vault_read_binary.too_large"],
+      ["vault_append", "vault_append", { path: notePath, content: "追加", ifMatch: computeContentVersion(source) }, "vault_read.too_large"],
+    ] as const) {
+      const canonical = await standard.client.callTool({ name, arguments: args });
+      const compatible = await text.client.callTool({ name: textName, arguments: args });
+      const original = readToolErrorPayload(canonical);
+      const actual = readToolErrorPayload(compatible);
+      assert.equal(actual.error.code, code);
+      assert.deepEqual(actual, original);
+      assert.deepEqual(actual.error.details, { path: notePath, maxBytes: 1,
+        ...(typeof expectedSize === "number" ? { observedSizeBytes: expectedSize } : { observedSizeBytesExact: expectedSize }),
+      });
+      if (typeof expectedSize === "string") {
+        assert.match(actual.error.message, /safe integer range/u);
+        assert.match(actual.error.message, /observedSizeBytesExact/u);
+        assert.match(actual.error.message, /67108864-byte maximum supported source size/u);
+        assert.match(actual.error.message, /Increasing the read limit cannot recover/u);
+      }
+      if (observed > 67108864n) assert.doesNotMatch(actual.error.message, /retry with|retry the same request/u);
+      if (name === "vault_read") {
+        const legacy = await standard.client.callTool({ name: "vault_read_text", arguments: args });
+        assert.deepEqual(readToolErrorPayload(legacy), original);
+      }
+      assertSafeResult(canonical, f.root);
+      assertSafeResult(compatible, f.root);
+    }
+  }
+  assert.equal(await readFile(path.join(f.vault, notePath), "utf8"), source);
 });
 
 test("text-profile shared-tool errors retain their stable shape without leaking roots or native binary data", async t => {

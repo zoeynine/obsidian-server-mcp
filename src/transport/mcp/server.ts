@@ -214,13 +214,12 @@ export function createVaultMcpServer(dependencies: VaultMcpServerDependencies, o
       ({ path, oldText, newText, ifMatch }) => mutations.replaceText(path, oldText, newText, { ifMatch }),
       (error, args) => mapVaultMutationToolError(error, args.path), { destructive: true, idempotent: false });
     const headingAddress = z.array(z.string()).nullable();
-    register(VAULT_PATCH_TOOL_NAME, "Patch a heading/block/property with exact-byte ifMatch from a read/map. Copy map keys unchanged. Heading content uses relative levels. No automatic retry.",
+    register(VAULT_PATCH_TOOL_NAME, "Patch a heading/block/property with exact-byte ifMatch from a read/map. Copy map keys unchanged. Heading content without within: # is one level below the target for content (default), or the target's actual parent for markerAndContent prepend/append. No automatic retry.",
       z.object({ path: z.string(), targetType: z.enum(["heading", "block", "frontmatter"]),
         target: z.union([headingAddress, z.string()]), within: z.number().int().optional(),
         operation: z.enum(["replace", "prepend", "append", "delete"]),
         scope: z.enum(["content", "marker", "markerAndContent", "parent"]).optional(),
-        content: z.string().max(MAX_VAULT_DOCUMENT_BYTES).optional()
-          .describe("Heading target without within: # is a child in content scope, a sibling with markerAndContent prepend/append."),
+        content: z.string().max(MAX_VAULT_DOCUMENT_BYTES).optional(),
         value: z.json().optional(),
         destination: z.object({ parent: headingAddress, place: z.union([z.enum(["first", "last"]),
           z.object({ before: headingAddress }).strict(), z.object({ after: headingAddress }).strict()]) }).strict().optional()

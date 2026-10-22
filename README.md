@@ -256,6 +256,15 @@ heading/block/property addresses, without returning the note body.
 Targeted reads still read and parse the full source and return its exact-byte
 `version`.
 
+For `vault_read.too_large`, `error.details.observedSizeBytes` is a JSON integer
+when the source size is at most `Number.MAX_SAFE_INTEGER`. If it is within the
+64 MiB hard cap, reuse that number as `maxBytes` in the same request; larger
+sources cannot be recovered by increasing `maxBytes`. Above the safe integer
+range, the numeric field is absent and `observedSizeBytesExact` holds the exact
+decimal string instead. Both profiles and tools sharing the read-error mapper
+use this contract. This changes the previous always-string size field; clients
+that require a string must adapt. No input coercion is applied.
+
 To read one section, first call `vault_get_document_map({"path":"note.md"})`.
 For `## Setup` inside `# Guide`, pass the full ancestor path to `vault_read`:
 
@@ -469,6 +478,21 @@ values, or `destination` for heading moves; do not combine these payloads.
 `delete` takes no payload. With `scope: "marker"`, supply only the new label,
 without heading `#` markers. Conflicts and failures are not automatically retried.
 
+When `vault_patch` targets a heading section, omit `within`. Heading markers in
+`content` are relative to the selected heading and scope, not absolute Markdown
+levels. `within` instead selects a body block for a block edit.
+
+| Scope and operation | Meaning of content starting with `#` |
+| --- | --- |
+| `content` (default), `replace` / `prepend` / `append` | A direct child of the selected heading |
+| `markerAndContent`, `prepend` / `append` | One level below the target's actual parent, before / after the selected section and its descendants; stored level = actual parent's physical level + input heading depth |
+
+With skipped heading levels, `markerAndContent` insertion may change existing
+nesting; sibling placement is not guaranteed.
+
+For literal heading levels at the end of a file, prefer `vault_append`; it
+preserves the supplied text but does not validate nesting.
+
 These examples are independent. For a note with `# Root`, `## A` and `## B`,
 replace the content of `A` while keeping its heading:
 
@@ -499,10 +523,6 @@ omit `createTargetIfMissing` when a missing property should be an error:
 }
 ```
 
-When `vault_patch` targets a heading section, omit `within`. Heading markers in
-`content` are relative to the selected heading and scope, not absolute Markdown
-levels. `within` instead selects a body block for a block edit.
-
 A heading `replace` with `scope: "content"` (the default) or `markerAndContent`
 replaces its entire subtree. If child headings exist, it fails with
 `vault_semantic.subtree_confirmation_required` unless you explicitly set
@@ -511,13 +531,9 @@ replaces its entire subtree. If child headings exist, it fails with
 `within: 0` for the first block (or its appropriate index); omit the confirmation.
 The flag applies only to these whole-section replacements, without `within`.
 
-| Scope and operation | Meaning of content starting with `#` |
-| --- | --- |
-| `content` (default), `replace` / `prepend` / `append` | A direct child of the selected heading |
-| `markerAndContent`, `prepend` / `append` | A sibling section before / after the selected section and its descendants |
-
-For example, with `# Root` containing `## A` and `## B`, insert a new sibling
-section immediately after `A` by calling `vault_patch` with:
+For example, with consecutive parent/child levels (`# Root` containing `## A`
+and `## B`), insert a new sibling section immediately after `A` by calling
+`vault_patch` with:
 
 ```json
 {
