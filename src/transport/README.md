@@ -18,11 +18,14 @@ filesystem contract is documented in [reference queries](../../docs/reference-qu
 The text/mutation contracts and differences are documented in the
 [pinned Local REST 5.3.1 tables](../../docs/local-rest-5.3.1-parity.md).
 
-One additional tool, obsidian_help, serves only static usage topics generated
-from marked sections of the repository README. Omitted topic returns an index;
-unknown topic returns a short error/index. It has no Vault dependencies or
-runtime filesystem/network access. Build-time generation owns README access;
-check:help detects stale generated content. Binary-enabled compositions expose
+One additional tool, obsidian_help, serves static guides from marked README
+sections and canonical tool manuals from docs/tool-help.md. Omitted topic
+returns Guides and Tools, with the actual names registered by this endpoint.
+Every canonical and text alias tool name is a lookup topic; alias manuals
+reuse the canonical content with presentation notes. Unknown topics return
+a short error with the same endpoint-aware index. The help adapter has no
+Vault dependencies or runtime filesystem/network access. Build-time generation
+owns Markdown access; check:help detects stale generated content. Binary-enabled compositions expose
 a version-pinned attachment resource template through the same guarded reader.
 There is no attachment enumeration or alternate filesystem access route.
 PDF paths are intentionally unsupported by all binary modes and the resource

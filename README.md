@@ -221,431 +221,192 @@ The text profile already includes that tool and never registers it twice.
 
 ### On-demand help
 
-Call `obsidian_help({})` for a compact topic index, then, for example,
-`obsidian_help({"topic":"patch"})` for that section alone. Unknown topics return
-a short error with the same topic index. Help reads no Vault data, makes no
-network calls and performs no mutations.
+Call `obsidian_help({})` for a compact index with **Guides** and **Tools**.
+Guides explain cross-tool workflows; Tools lists the names actually exposed by
+this endpoint. Ask for `obsidian_help({"topic":"search_query"})` for one tool's
+contract and examples, or `obsidian_help({"topic":"search"})` for its workflow.
+All canonical names and the four text-profile names have manuals, including
+`obsidian_help` itself. A known manual does not enable an unavailable tool;
+its opening notice identifies that situation and any registered counterpart.
+Unknown topics return a recoverable error with this endpoint's index. Help
+reads no Vault data, makes no network calls and performs no mutations.
 
-The marked sections below are the single source for the bundled help text.
-Edit them here, run `npm run generate:help`, and commit the generated module.
-`npm run check:help` detects drift; builds also regenerate the module. Runtime
-help uses those bundled strings, so a deployed package needs no README file.
+The marked guides below and the canonical [tool manual](docs/tool-help.md) are
+the documentation sources. Text aliases reuse canonical tool content and add
+only presentation notes; they do not maintain separate contracts. Edit these
+sources, run `npm run generate:help`, and commit the generated module.
+`npm run check:help` detects drift; builds also regenerate it. Runtime help uses
+bundled strings, so a deployed package needs neither Markdown source file.
 
 <!-- obsidian-help:read -->
 ### Finding and reading notes
 
-List the Vault root with `vault_list({"path":""})`, or omit `path`. Paths are
-Vault-relative; `/` and `.` are not root aliases.
+Start with `vault_list` to discover paths. For a known note, use
+`vault_get_document_map` when you need reliable heading paths, block IDs or
+property names, then copy its keys unchanged to a targeted `vault_read`.
+Use a whole-file read for full context or an exact source slice for replacement.
+Targeted heading levels are relative; inspect the whole file or map to verify
+stored nesting after a structural change.
 
-If your endpoint exposes `vault_list_text`, `vault_read_text`,
-`vault_get_document_map_text` or `search_query_text`, these aliases accept the
-same inputs. Data tools return compact JSON; use the paths, heading keys and
-versions unchanged. A text-profile `vault_read_text` returns metadata JSON with
-`textField` in the first block and the corresponding raw text in the second:
-`content` for whole files, `result` for heading/block reads. Frontmatter targets
-remain single-block typed JSON. A legacy text-read-only host may still return
-the entire reading as single-block JSON. The instructions for the corresponding
-original tools also apply to the aliases.
+Both map and read return the exact-byte `version` used as `ifMatch` by later
+mutations. A successful read is evidence for that version, not a lock on the note.
+If a write reports a conflict, reread and reconcile before another attempt.
+`maxBytes` admits the entire source document, even for a small target; narrowing
+the target does not bypass file-size limits or frontmatter parsing.
 
-Whole-file reads return `path`, `content`, `tags`, parsed `frontmatter`,
-filesystem `stat`, and SHA-256 `version`. Targeted reads return
-`{path,version,result}`. `vault_get_document_map` returns the same version plus
-heading/block/property addresses, without returning the note body.
-
-`maxBytes` applies to the entire source document, not the selected target.
-Targeted reads still read and parse the full source and return its exact-byte
-`version`.
-
-For `vault_read.too_large`, `error.details.observedSizeBytes` is a JSON integer
-when the source size is at most `Number.MAX_SAFE_INTEGER`. If it is within the
-64 MiB hard cap, reuse that number as `maxBytes` in the same request; larger
-sources cannot be recovered by increasing `maxBytes`. Above the safe integer
-range, the numeric field is absent and `observedSizeBytesExact` holds the exact
-decimal string instead. Both profiles and tools sharing the read-error mapper
-use this contract. This changes the previous always-string size field; clients
-that require a string must adapt. No input coercion is applied.
-
-To read one section, first call `vault_get_document_map({"path":"note.md"})`.
-For `## Setup` inside `# Guide`, pass the full ancestor path to `vault_read`:
-
-```json
-{"path":"note.md","targetType":"heading","target":["Guide","Setup"]}
-```
-
-Copy every heading key from the returned tree unchanged, including any marker
-used to distinguish repeated headings. Block targets use a reference ID without
-`^`; frontmatter targets use the property name. `scope` selects part of a target
-and requires `targetType` and `target`; it is not a whole-file field selector.
-
-Targeted heading reads express levels relative to their scope. Use the map or
-a whole-file read to verify actual nesting after a structural edit. For
-`vault_replace_text`, copy an unchanged slice from a whole-file read's `content`
-and use the `version` from that same response; targeted heading text is not
-guaranteed to be an exact source slice. Whole-file `vault_read` still parses
-frontmatter and can fail on malformed or unsupported YAML.
+Ask for tool topics `vault_list`, `vault_get_document_map` and `vault_read`
+for limits, targeted-read examples and size-error recovery. For attachments use
+guide `binary`; for selecting notes use `search`; for edits use `write`.
 <!-- /obsidian-help -->
 
 <!-- obsidian-help:binary -->
 ### Reading attachments
 
-`vault_read_binary({path, as?: "auto" | "bytes" | "link"})` accepts the same
-Vault-relative paths and filesystem permissions as text reads. It performs no
-OCR, upload or Vault mutation. MIME type is inferred from
-the filename, with `application/octet-stream` for unknown extensions.
+Use `vault_read_binary` for images and non-PDF attachments. Its default
+`auto` mode selects a bounded native raster preview or a short-lived protected
+HTTPS resource link for another file type. Choose `bytes` only when the client
+needs exact bytes within its transfer cap, or `link` when it needs a download.
+Generic download delivery requires the embedding host's link provider.
 
-**PDF is intentionally unsupported for both reading and delivery.** PDF paths
-(`.pdf`, case-insensitive) return `vault_read_binary.unsupported_pdf` in every
-mode, including `bytes`, and through MCP resource reads. Use the client's native
-file upload / attachment feature for PDFs; changing `as` does not enable them.
+PDF is intentionally unsupported in every mode, including resource reads.
+Use the client's native file upload or attachment feature for PDFs. This tool
+does not perform OCR or document extraction. Preview metadata identifies a
+derived image; it is not evidence that the original bytes were transferred.
 
-- `auto` (default): PNG/JPEG/GIF/WebP become a native MCP image preview.
-  The first frame is auto-oriented and resized without enlargement to at most
-  1568 pixels on either edge. The WebP preview is at most 1 MiB, with a 40-million
-  input-pixel guard, 64 MiB source-byte cap and five-second processing timeout.
-  Metadata marks it as a preview and reports whether only the first frame was
-  returned. The original file is unchanged; use `bytes` for its exact bytes.
-- `auto` for other non-PDF files returns a signed HTTPS download link,
-  even for small or empty files. SVG and other image formats also use this path;
-  they are not rasterized. The original bytes travel over HTTPS rather than
-  being embedded in the tool result. The client must fetch the URL to read them.
-- Oversized or unavailable image previews also select a link.
-  `as: "link"` requests a download link directly, including for raster images.
-- `as: "bytes"` returns original bytes as a binary resource, with an inclusive
-  4 MiB hard cap. It never converts, truncates or silently falls back to a link.
-  This is an explicit low-level option for supported non-PDF attachments.
-
-Payload appears once in MCP `content` (image, embedded resource or resource link);
-`structuredContent` contains only delivery metadata. Inline results carry an
-exact-byte source `version`. The `bytes` result's `obsidian-vault://attachment/…` URI
-can be re-read through MCP resources with the same 4 MiB cap and version check;
-it is not a browser/download URL. Resource reads do not enumerate attachments.
-
-Links require a deployment-provided, short-lived HTTPS download URL. Stock
-stdio has no link provider and returns `vault_read_binary.link_unavailable`
-for non-PDF `auto` downloads, explicit links and image fallbacks. Links must
-expire within 15 minutes and deliver the original file without a login page.
-Non-preview `auto` and explicit `link` inspect the source without loading or
-hashing its body, so no content version is claimed. An unversioned link refers
-to the current file at download time; an image fallback with a source `version`
-must deliver those exact bytes or reject a changed file. The download handler
-must recheck path protection, current read access and the PDF exclusion,
-including for previously issued links. No automatic retries occur.
-
-Examples:
-
-```json
-{"path":"Attachments/diagram.png"}
-{"path":"Attachments/archive.zip"}
-{"path":"Attachments/archive.zip","as":"bytes"}
-{"path":"Attachments/recording.mp4","as":"link"}
-```
+Ask for tool topic `vault_read_binary` for exact limits, delivery metadata,
+examples and link-unavailable recovery. Guide `paths` applies to attachments
+as well as notes.
 <!-- /obsidian-help -->
 
 <!-- obsidian-help:search -->
 ### Searching notes
 
-`search_query` can use these fields with JsonLogic `var`:
+Choose `search_query` for content/property conditions, `tag_list` for tag
+inventory, or `reference_query` for bounded link resolution. A literal content
+match can find link-shaped text but does not establish a backlink. Inspect
+selected notes with `vault_get_document_map` and targeted or full `vault_read`.
 
-| Field | Value |
-| --- | --- |
-| `path` | Vault-relative file path, such as `projects/plan.md` |
-| `content` | Complete Markdown text, including frontmatter |
-| `tags` | Direct frontmatter and inline tags, without `#` or added parent tags |
-| `frontmatter` | Parsed properties; use dot notation such as `frontmatter.status` |
-| `stat` | `ctime` and `mtime` in milliseconds, `size` in bytes |
+JsonLogic evaluates an expression against each Markdown note. An operator has
+one key; combine conditions with `and` or `or`. The returned value is the
+expression's truthy result, which may be a boolean or data rather than a snippet.
+Use `scope` to choose the scan before adding predicates. A path/glob predicate
+filters matches without reducing scan work; `maxTotalBytes` counts scanned
+bytes, not response size. Scan and result overflow fail without partial success;
+the fixed output cap reports `search_query.budget_exceeded`.
 
-Optional `scope` limits the scan to a Vault-relative `directory` (`""` is the
-root). Both `directory` and `recursive` are required when scope is provided:
-`recursive: false` scans only direct child files; `true` includes subdirectories.
-Omitting scope keeps the recursive whole-Vault Markdown scan.
-
-Budget parameters on `search_query` and `tag_list` are optional. Normally omit
-them to use default limits; set them when you intentionally want custom hard
-limits. For example, scan only `projects/` and its subdirectories for `needle`,
-choosing a limit of 50 matches:
-
-```json
-{
-  "scope": {"directory": "projects", "recursive": true},
-  "query": {"in": ["needle", {"var": "content"}]},
-  "maxResults": 50
-}
-```
-
-Only `scope` limits which files the server scans. Query path/glob conditions
-filter returned matches without pruning the scan; glob `*` also matches nested
-directories. `maxTotalBytes` limits scanned bytes, not response size.
-Exceeding a scan or result limit returns an error
-instead of partial results. Each match contains `filename`, `version` and the
-query's truthy `result` value; this example returns `true`, not a text snippet.
-
-Results also have a fixed 4 MiB output budget, including conservative per-result
-overhead. Overflow returns `search_query.budget_exceeded` with
-`budget: "maxOutputBytes"`; this budget is not a configurable input parameter.
-
-`links`, `backlinks` and `unresolvedLinks` are unavailable. To find possible
-references, search `content` for literal link text, for example
-`{"query":{"in":["[[Note",{"var":"content"}]}}`. Inspect candidates with
-`vault_get_document_map` and targeted `vault_read`; a text match does not resolve
-links and may miss other link spellings or match longer names.
-
-JsonLogic supports comparisons, logic, string/collection/arithmetic operators,
-plus `glob` and `regexp`. Unsafe prototype access and the `log` operator are
-rejected. Malformed or unsupported frontmatter in any scanned note fails the
-query explicitly.
-
-An operator expression has exactly one key. Objects with multiple keys are
-literal data in JsonLogic; for example, `{"a":1,"b":2}` is a truthy result for
-every scanned note, not two conditions. Combine conditions with `and` or `or`.
+Ask for tool topic `search_query` for fields, operators, limits and runnable
+content/frontmatter/compound examples. Guide `tags` explains aggregation;
+`references` explains source and resolution coverage.
 <!-- /obsidian-help -->
 
 <!-- obsidian-help:references -->
 ### Finding references to a target
 
-`reference_query` is a separate read-only tool. Specify where to scan Markdown
-bodies, whether to recurse, and the exact Vault-relative target file:
+Use `reference_query` when spelling alone cannot decide whether a link points
+to a particular file, heading or block. Choose a source `scope` for Markdown
+bodies and a `resolutionScope` for the filename inventory used to resolve links.
+The inventory defaults to the source scope. A recursive root inventory can
+establish uniqueness for a bare wikilink; a partial inventory cannot prove it.
 
-```json
-{
-  "scope": {"directory": "projects", "recursive": true},
-  "resolutionScope": {"directory": "", "recursive": true},
-  "target": {"path": "notes/Design.md"}
-}
-```
+Treat confirmed `matches` separately from `uncertain` occurrences. Uncertain
+links may be unrelated to the requested target. Completeness describes only the
+declared scopes and supported syntax: incoming links outside the source scope
+remain unknown. This is neither a persisted link graph nor an atomic Vault
+snapshot. The tool performs no repair or mutation.
 
-`resolutionScope` inventories filenames, including attachments; it does not
-read every note body. It defaults to `scope`. Bare wikilinks such as `[[Design]]`
-need a recursive root inventory to establish uniqueness among accessible files.
-A unique candidate in a partial inventory remains `unknown`; duplicate candidates
-are `ambiguous`. Explicit paths to the requested target can resolve outside that
-inventory. The target is inspected/read even when outside the source scope.
-
-To query a section, use `target: {"path":"notes/Design.md","heading":["Overview"]}`;
-for a block, use `target: {"path":"notes/Design.md","block":"decision"}`. Do not
-combine heading and block. Heading texts are case-sensitive, plain, consecutive
-ancestor names; duplicate anchors are ambiguous, not selected by map suffixes.
-
-`matches` contains confirmed references. `uncertain` contains ambiguous,
-unresolved, unsupported or unknown occurrences across the source scope; these
-may be unrelated to the target and are not inferred backlinks. Each occurrence
-includes source path/version, raw link, parsed destination when available,
-zero-based half-open UTF-16 offsets and one-based line/UTF-16 column.
-`target.fileExists` describes the file; `target.status` separately describes the
-requested file/heading/block. Target Markdown carries its exact-byte version.
-
-Supports ordinary wikilinks and CommonMark inline/reference links, display aliases
-and embeds. Frontmatter aliases do not add filename candidates. Attachments are
-checked for existence only; page/time fragments are unsupported, and this does
-not enable PDF reading. Formatted heading anchors are conservative/unsupported.
-Frontmatter, code, comments, balanced math, HTML and external URLs are excluded.
-
-Completeness covers only the declared scopes and supported syntax. Incoming
-links outside the source scope remain `unknown`; this is not an atomic Vault
-snapshot. Defaults/hard maxima: entries 20,000/200,000; inventoried files
-2,000/10,000; per-file bytes 1/4 MiB; total read bytes 8/32 MiB; returned matches
-plus uncertainties 1,000/10,000; JSON output 1/4 MiB. Override with `maxEntries`,
-`maxFiles`, `maxFileBytes`, `maxTotalBytes`, `maxResults`, `maxOutputBytes`.
-The final target recheck counts toward total read bytes. Parsing also has worker,
-time and structural limits. Overflow, scan failure or detected namespace/target
-change fails the call; no partial success, mutation, repair or automatic retry.
+Ask for tool topic `reference_query` for target syntax, locators, limits and
+examples. Use guide `search` for literal candidate discovery and `read` to
+inspect a matched source with its exact version.
 <!-- /obsidian-help -->
 
 <!-- obsidian-help:tags -->
 ### Listing tags
 
-`tag_list({})` returns tags from Markdown files with a count of files containing
-each tag. Names omit `#`; repeated occurrences in one file count once. Nested
-parents are included: `a/b` also counts toward `a`. By contrast, `vault_read`
-and `search_query` expose direct tags without adding parents.
+Choose `tag_list` to discover tag names and how many Markdown files contain
+each tag. It counts repeated occurrences in a file once and aggregates nested
+parents: a note with `a/b` contributes to both `a/b` and `a`.
+By contrast, `vault_read` and `search_query` expose only direct tags.
+Use `search_query` when you need the matching notes or property conditions.
 
-Tags come from frontmatter `tags` and inline hashtags. Inline recognition may
-differ from Obsidian Desktop. Budget arguments are optional; normally omit them
-to use defaults. `maxTags` counts unique names including parents. Scan or tag
-limit overflow fails explicitly, without returning a truncated list. Malformed
-or unsupported frontmatter also fails the scan.
+Tags come from frontmatter and inline hashtags. Inline recognition can differ
+from Obsidian Desktop. Scan/tag limits and malformed or unsupported frontmatter
+fail explicitly, so an error is not evidence of an empty inventory.
+
+Ask for tool topic `tag_list` for its limits and result example, or
+`search_query` for filtering by direct tags.
 <!-- /obsidian-help -->
 
 <!-- obsidian-help:patch -->
 ### Patching headings and properties
 
-Call `vault_get_document_map` first to discover exact heading paths and obtain
-the file's current exact-byte `version` for `ifMatch`. The map returns that
-version without returning the whole note text. Replace `<current version>` in
-each example below with the version from the latest map or read of `note.md`.
+Use `vault_get_document_map` to discover an exact semantic target and its
+version, then `vault_patch` to edit that heading, block or property with
+`ifMatch`. Choose a scope before writing content: a section body, its marker,
+the whole section or a move of its parent relationship have different effects.
+`within: 0` selects the first direct body block when child sections should be
+retained; choose the appropriate index for another body block.
 
-Use `content` for Markdown or label edits, `value` for frontmatter property
-values, or `destination` for heading moves; do not combine these payloads.
-`delete` takes no payload. With `scope: "marker"`, supply only the new label,
-without heading `#` markers. Conflicts and failures are not automatically retried.
+Heading content uses relative levels. In the default `content` scope, input
+`#` becomes a child of the selected heading. With `markerAndContent`
+prepend/append it is relative to the target's actual parent; skipped levels
+can change nesting. Whole-subtree replacement with children fails with
+`vault_semantic.subtree_confirmation_required` unless explicitly allowed with
+`allowSubtreeReplacement: true` as well as a current `ifMatch`.
 
-When `vault_patch` targets a heading section, omit `within`. Heading markers in
-`content` are relative to the selected heading and scope, not absolute Markdown
-levels. `within` instead selects a body block for a block edit.
+Choose typed `value` for a frontmatter property and `destination` for a
+heading move. For a literal exact source edit use `vault_replace_text`; for
+literal Markdown at the file end consider `vault_append`.
+After a structural edit, check the map or whole-file `vault_read`: targeted
+heading reads normalize displayed levels and cannot by themselves prove nesting.
 
-| Scope and operation | Meaning of content starting with `#` |
-| --- | --- |
-| `content` (default), `replace` / `prepend` / `append` | A direct child of the selected heading |
-| `markerAndContent`, `prepend` / `append` | One level below the target's actual parent, before / after the selected section and its descendants; stored level = actual parent's physical level + input heading depth |
-
-With skipped heading levels, `markerAndContent` insertion may change existing
-nesting; sibling placement is not guaranteed.
-
-For literal heading levels at the end of a file, prefer `vault_append`; it
-preserves the supplied text but does not validate nesting.
-
-These examples are independent. For a note with `# Root`, `## A` and `## B`,
-replace the content of `A` while keeping its heading:
-
-```json
-{
-  "path": "note.md",
-  "targetType": "heading",
-  "target": ["Root", "A"],
-  "operation": "replace",
-  "scope": "content",
-  "content": "New body.",
-  "ifMatch": "<current version>"
-}
-```
-
-Set the `status` property, creating it if missing. Use `value`, not `content`;
-omit `createTargetIfMissing` when a missing property should be an error:
-
-```json
-{
-  "path": "note.md",
-  "targetType": "frontmatter",
-  "target": "status",
-  "operation": "replace",
-  "value": "ready",
-  "createTargetIfMissing": true,
-  "ifMatch": "<current version>"
-}
-```
-
-A heading `replace` with `scope: "content"` (the default) or `markerAndContent`
-replaces its entire subtree. If child headings exist, it fails with
-`vault_semantic.subtree_confirmation_required` unless you explicitly set
-`allowSubtreeReplacement: true`. This confirmation still requires a fresh
-`ifMatch`. To edit one direct body block while keeping child sections, use
-`within: 0` for the first block (or its appropriate index); omit the confirmation.
-The flag applies only to these whole-section replacements, without `within`.
-
-For example, with consecutive parent/child levels (`# Root` containing `## A`
-and `## B`), insert a new sibling section immediately after `A` by calling
-`vault_patch` with:
-
-```json
-{
-  "path": "note.md",
-  "targetType": "heading",
-  "target": ["Root", "A"],
-  "operation": "append",
-  "scope": "markerAndContent",
-  "content": "# Inserted",
-  "ifMatch": "<current version>"
-}
-```
-
-The stored order is `## A`, `## Inserted`, `## B`. Use `prepend` to insert before
-`A`. With the default `content` scope, `# Inserted` would instead become
-`### Inserted` inside `A`; `## Inserted` would become `#### Inserted`.
-
-`destination` moves an existing heading section. For example, to move `A`
-under `B` as its last child, use `operation: "replace"` and `scope: "parent"`
-with a fresh version and no `content`:
-
-```json
-{
-  "path": "note.md",
-  "targetType": "heading",
-  "target": ["Root", "A"],
-  "operation": "replace",
-  "scope": "parent",
-  "destination": {"parent": ["Root", "B"], "place": "last"},
-  "ifMatch": "<current version>"
-}
-```
-
-After a structural patch, check `vault_get_document_map` for actual nesting or
-read the whole file with `vault_read({"path":"note.md"})` for stored `#` levels.
-Targeted heading reads normalize levels relative to the selected scope, so
-their displayed `#` counts alone cannot confirm the stored hierarchy.
+Ask for tool topic `vault_patch` for scope/payload combinations, subtree
+recovery and runnable examples. Guide `write` compares the mutation tools.
 <!-- /obsidian-help -->
 
 <!-- obsidian-help:write -->
 ### Writing, appending and replacing text
 
-`vault_write` creates a UTF-8 text file or replaces its whole content.
-`vault_append` adds text, creating the file if missing. Both create missing
-parent directories. Binary file extensions, NUL and malformed text are refused.
+Choose the operation that matches the intended change:
 
-For an existing file, obtain its latest `version` with `vault_read` or
-`vault_get_document_map` and pass it as `ifMatch`; there is no force bypass.
-For a new file omit `ifMatch`. A version conflict means the file changed:
-reread, reconcile the intended edit, then decide whether to submit a new write.
-No mutation is automatically retried on conflict or failure.
+- `vault_write`: create a text file or replace its entire content.
+- `vault_append`: add literal text at the end, creating a missing file.
+- `vault_replace_text`: replace one unique literal slice from a whole-file read.
+- `vault_patch`: edit a semantic heading, body block or typed property.
 
-Append adds LF before the supplied text when an existing file does not end in
-LF, including an empty existing file. A missing file receives exactly the
-supplied content. Successful writes return a compact receipt with the new
-version, not the whole note. A successful receipt with a cleanup warning means
-the content was saved; inspect the warning instead of blindly appending again.
+For an existing file, read its exact-byte `version` with `vault_read` or
+`vault_get_document_map` and pass it as `ifMatch`. Exact replacement needs
+the original slice and version from the same whole-file read. Create with
+write/append without `ifMatch` only when the path is missing. A conflict calls
+for rereading and reconciling; mutations never transparently retry.
 
-`vault_replace_text` edits an existing text file with exactly four required
-fields: `path`, `oldText`, `newText` and `ifMatch`. It searches the whole
-file for a literal, case-sensitive exact match. `oldText` must be nonempty
-and occur exactly once, counting overlapping occurrences. Zero or multiple
-matches fail without writing; error details contain `matchCount: 0` or
-`matchCountAtLeast: 2`, without source offsets or snippets. Expand `oldText`
-with surrounding original text to make the intended location unique.
-An empty `newText` deletes that match. Equal old and new strings fail with
-`vault_mutation.no_change`. The new string is literal too: `$&` and `$1` have
-no substitution meaning.
+Successful receipts report the saved version and before/after UTF-8 byte sizes.
+They establish that bytes were committed, not that the edit fulfilled its intent
+or preserved Markdown structure. Inspect content or a map when that matters.
+A saved-note cleanup warning means the write succeeded; do not append again.
 
-First read the whole file with `vault_read({"path":"note.md"})`. For a note
-whose `content` contains `Old body.` exactly once, copy that original text and
-the same response's `version`, then call `vault_replace_text`:
-
-```json
-{
-  "path": "note.md",
-  "oldText": "Old body.",
-  "newText": "New body. $& is literal.",
-  "ifMatch": "<current version>"
-}
-```
-
-The two strings together may contain at most 4 MiB of UTF-8 bytes. Both the
-original and resulting file must also fit the store's configured text limit
-(4 MiB by default, 64 MiB hard maximum). No newline, BOM or Unicode
-normalization is applied; unmatched bytes remain unchanged. Replacement uses
-the shared version checks and atomic commit, without the Markdown parser or
-automatic retries. The whole-file read still parses frontmatter, so this is
-not a malformed-YAML recovery workflow. Targeted heading reads normalize
-levels and may not supply an exact source slice. There are no scope, index,
-replace-all, regex, fuzzy-match or batch options.
-
-Write, append, patch and exact replacement receipts contain `beforeSizeBytes`
-for the original file and `sizeBytes` for the saved file, in UTF-8 bytes.
-`beforeSizeBytes: 0` applies to both missing and empty files; `created`
-distinguishes them. Exact replacement also returns `replacementCount: 1`.
-These compact signals do not confirm Markdown structure or editing intent;
-inspect the saved content or document map when that matters. Receipts do not
-include diffs, heading lists, target echoes or the note body.
+Ask for each tool's own topic for its contract and examples. Guide `patch`
+covers structured editing, `paths` covers shared path/text limits and `files`
+covers moving or deleting files.
 <!-- /obsidian-help -->
 
 <!-- obsidian-help:paths -->
 ## Paths and file limits
 
-One shared sandbox rejects absolute/traversing/noncanonical paths, symbolic
-links, escape, reserved Windows names and replacement of the original Vault
-root. Dot-prefixed components are protected internals; embedders can protect
-additional internal-state subtrees. Discovery and direct tools use the same
-policy. These are generic containment and internal-state safeguards.
-Text access rejects binary extensions, NUL and malformed UTF-8/Unicode, while
-preserving BOM and original newlines. Reads and mutations default to 4 MiB with
-a 64 MiB hard cap.
+All tool paths are untrusted Vault-relative paths. The shared sandbox rejects
+absolute, traversing and noncanonical paths, symbolic-link traversal, escape,
+reserved Windows names and replacement of the original Vault root. Dot-prefixed
+components and host-configured internal subtrees are protected; discovery omits
+them and direct access refuses them. The empty string means root only for inputs
+that explicitly support it, such as listing and scan directories.
+
+Text operations reject binary extensions, NUL and malformed UTF-8/Unicode while
+preserving BOM and original newlines. Read and mutation text sizes default to
+4 MiB with a 64 MiB hard cap. Each tool also has its own entry, scan or result
+limits; a smaller returned target does not waive whole-source admission.
+
+Deployment filesystem permissions remain authoritative. These safeguards are
+not a client authorization policy or a cross-process filesystem lock.
+Ask for the relevant tool topic for its parameter limits and actionable errors.
 <!-- /obsidian-help -->
 
 The mutation path is deliberately small:
@@ -696,29 +457,23 @@ the note body is not echoed.
 <!-- obsidian-help:files -->
 ## Moving and deleting files
 
-`vault_move` takes `path`, `destination` and optional `allowOverwrite` (false by
-default), returning `{message: "OK", oldPath, newPath}`. Missing destination
-parents are created. A trailing `/` retains the filename; an empty destination
-moves to the Vault root. Desktop link rewriting and history updates are
-unavailable, so referring notes are unchanged. Overwrites use atomic rename.
-Without overwrite permission, atomic hard-link publication refuses a raced-in
-destination, followed by source unlink. Both names briefly exist; a failed source
-unlink removes only the newly created link. If safe cleanup fails, the error
-names both relative paths for inspection. There is no copy fallback or retry.
+Use `vault_move` to relocate a file and `vault_delete` to delete one.
+Neither operation updates incoming links or Obsidian Desktop history.
+If link impact matters, inspect it with `reference_query` within declared
+scopes before the move; outside-scope incoming links remain unknown.
 
-`vault_delete` takes `path` and optional `permanent` (false by default).
-Recoverable deletion renames into `.trash/<unique-directory>/<filename>` on the
-same filesystem and returns `message`, `path`, `permanent: false` and `trashPath`.
-Recovery uses filesystem access to that receipt path; `.trash` is protected from
-ordinary MCP tools. `permanent: true` unlinks the file and returns `message`,
-`path` and `permanent: true`. Trash failure never falls back to permanent deletion.
+Move overwrites require `allowOverwrite`. Delete defaults to recoverable
+Vault-local trash; `permanent: true` is irreversible. Both accept an optional
+exact-byte `ifMatch` for the source. Omitting it acts on the current path;
+on move it never protects the destination's version. Directories and files
+with additional hard links are refused.
 
-Both tools accept an optional SHA-256 `ifMatch` extension and share the mutation
-locks and path checks. They can relocate/delete attachments without decoding or
-transferring their bytes. Version checking is limited to 64 MiB; omitted tokens
-retain Local REST's operation-on-current-path behavior. Operations on directories
-and additional hard links are refused; directory deletion could contain protected
-internal descendants. The exact Desktop differences are recorded in the parity table.
+Neither tool automatically retries. Trash failure does not fall back to
+permanent deletion, and move has no cross-filesystem copy fallback. Recovery
+from trash requires filesystem access to the receipt's protected trash path.
+
+Ask for tool topics `vault_move` and `vault_delete` for destination syntax,
+receipts, recovery and examples. Guide `paths` describes shared containment.
 <!-- /obsidian-help -->
 
 ## Requirements and checks

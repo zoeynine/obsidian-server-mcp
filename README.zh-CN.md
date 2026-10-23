@@ -28,7 +28,7 @@
 - 列出 tags；
 - 读取图片预览与非 PDF 附件；
 - 移动和删除文件；
-- 按需读取 `obsidian_help`。
+- 按需读取 `obsidian_help`：省略 topic 可查看 Guides 和当前端点的 Tools；按具体工具名（如 `search_query`）查看契约与示例，按功能主题（如 `search`）查看跨工具工作流。text 名称复用同一份工具手册。
 
 其中 `vault_patch`、引用查询、binary delivery、错误语义和预算限制等完整说明都在英文 README 与 `docs/` 中。
 

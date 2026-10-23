@@ -251,7 +251,12 @@ test("the legacy text-read flag retains its single JSON block for full and targe
   }
   const standardHelp = await f.standard.client.callTool({ name: "obsidian_help", arguments: {} });
   const legacyHelp = await legacy.client.callTool({ name: "obsidian_help", arguments: {} });
-  assert.deepEqual(legacyHelp, standardHelp);
+  assert.notEqual(legacyHelp.isError, true);
+  assert.deepEqual(legacyHelp.content, []);
+  const legacyIndex = (legacyHelp.structuredContent as { text: string }).text;
+  assert.match(legacyIndex, /\nvault_read_text(?:\n|$)/u);
+  assert.equal(legacyIndex.split("\n").filter(line => line !== "vault_read_text").join("\n"),
+    (standardHelp.structuredContent as { text: string }).text);
 });
 
 test("the raw body and metadata version can be used directly for exact replacement with ifMatch", async t => {
@@ -436,7 +441,15 @@ test("text-profile help, tags and references return compact JSON with the standa
     const standard = await f.standard.client.callTool({ name: "obsidian_help", arguments: args });
     const text = await f.compatibility.client.callTool({ name: "obsidian_help", arguments: args });
     assert.notEqual(text.isError, true, JSON.stringify(text));
-    assert.deepEqual(textPayload(text), standard.structuredContent);
+    const payload = textPayload(text) as { text: string };
+    assert.deepEqual(Object.keys(payload), ["text"]);
+    assert.equal(typeof payload.text, "string");
+    if ("topic" in args) {
+      assert.deepEqual(payload, standard.structuredContent);
+    } else {
+      const names = payload.text.split("\nTools:\n")[1]?.split("\n");
+      assert.deepEqual(names, (await f.compatibility.client.listTools()).tools.map(tool => tool.name).sort());
+    }
     assert.deepEqual(standard.content, []);
   }
 });
@@ -628,7 +641,17 @@ test("text-profile shared-tool errors retain their stable shape without leaking 
     const text = await f.compatibility.client.callTool({ name, arguments: args });
     const actual = readToolErrorPayload(text);
     assert.equal(actual.error.code, code);
-    assert.deepEqual(actual, readToolErrorPayload(standard));
+    const original = readToolErrorPayload(standard);
+    if (name === "obsidian_help") {
+      assert.deepEqual(Object.keys(actual.error), Object.keys(original.error));
+      const [standardMessage, standardTools] = original.error.message.split("\nTools:\n");
+      const [textMessage, tools] = actual.error.message.split("\nTools:\n");
+      assert.equal(textMessage, standardMessage);
+      assert.deepEqual(standardTools?.split("\n"), (await f.standard.client.listTools()).tools.map(tool => tool.name).sort());
+      assert.deepEqual(tools?.split("\n"), (await f.compatibility.client.listTools()).tools.map(tool => tool.name).sort());
+    } else {
+      assert.deepEqual(actual, original);
+    }
     assertSafeResult(text, f.root);
   }
 });

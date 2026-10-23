@@ -24,9 +24,12 @@ symlink, protected-path and exact-byte `ifMatch` checks intact. Mutations use
 the shared atomic publication layer. Add focused regression coverage when
 changing these contracts, and document intentional compatibility changes.
 
-Edit README sections marked `obsidian-help` to change tool help, then run
-`npm run generate:help`. Commit the updated generated file with the source
-documentation. `npm run check:help` detects drift.
+Edit the marked guides in README.md and canonical tool topics in
+[docs/tool-help.md](docs/tool-help.md), then run `npm run generate:help`.
+Text aliases share those canonical topics; presentation-only differences live
+in the help adapter. Keep detailed contracts in tool topics and cross-tool
+workflows in guides. Commit the generated file with its sources.
+`npm run check:help` detects drift; help tests execute published examples.
 
 Include only code, tests and public documentation in a contribution. Do not
 include real Vault content, credentials, personal logs or machine-specific

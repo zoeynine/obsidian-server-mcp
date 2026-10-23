@@ -1,4 +1,4 @@
-import { registerVaultBinaryTool, type VaultBinaryReadUseCase, type VaultBinaryLinkProvider } from "./vault-read-binary.js";
+import { VAULT_READ_BINARY_TOOL_NAME, registerVaultBinaryTool, type VaultBinaryReadUseCase, type VaultBinaryLinkProvider } from "./vault-read-binary.js";
 import { McpServer, type CallToolResult } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
 import { EngineError, TargetNotFoundError } from "markdown-patch";
@@ -21,7 +21,7 @@ import { mapVaultMutationToolError } from "./vault-mutation-errors.js";
 import type { VaultMutationStore } from "../../core/mutation/vault-mutations.js";
 import { MAX_TEXT_REPLACEMENT_INPUT_BYTES } from "../../core/mutation/prepare-text-replacement.js";
 import { mapObsidianHelpError, readObsidianHelp } from "./obsidian-help.js";
-import { registerReferenceQuery, type ReferenceQueryUseCase } from "./reference-query.js";
+import { REFERENCE_QUERY_TOOL_NAME, registerReferenceQuery, type ReferenceQueryUseCase } from "./reference-query.js";
 
 export const MCP_SERVER_NAME = "obsidian-server-mcp";
 export const MCP_SERVER_VERSION = "0.1.0";
@@ -104,11 +104,17 @@ function semanticError(error: unknown, targetType?: unknown, textProfile = false
 export function createVaultMcpServer(dependencies: VaultMcpServerDependencies, options: VaultMcpServerOptions = {}): McpServer {
   const server = new McpServer({ name: MCP_SERVER_NAME, version: MCP_SERVER_VERSION });
   const textProfile = options.toolProfile === "text";
-  if (dependencies.referenceQuery) registerReferenceQuery(server, dependencies.referenceQuery, textProfile);
+  const helpToolNames: string[] = [];
+  const helpOptions = { toolNames: helpToolNames, textProfile, legacyTextRead: options.enableTextRead === true };
+  if (dependencies.referenceQuery) {
+    registerReferenceQuery(server, dependencies.referenceQuery, textProfile);
+    helpToolNames.push(REFERENCE_QUERY_TOOL_NAME);
+  }
   function register<I extends z.ZodRawShape>(name: string, description: string, input: z.ZodObject<I>, output: z.ZodType,
     run: (args: z.infer<z.ZodObject<I>>) => Promise<unknown>, mapError: (error: unknown, args: z.infer<z.ZodObject<I>>) => CallToolResult,
     mutation?: { readonly destructive: boolean; readonly idempotent: boolean }, textOnly = textProfile,
     present?: (result: unknown, args: z.infer<z.ZodObject<I>>) => CallToolResult): void {
+    helpToolNames.push(name);
     server.registerTool(name, { description, inputSchema: input, ...(textOnly ? {} : { outputSchema: output }),
       annotations: { readOnlyHint: mutation === undefined, destructiveHint: mutation?.destructive ?? false,
         idempotentHint: mutation?.idempotent ?? true, openWorldHint: false } },
@@ -129,10 +135,8 @@ export function createVaultMcpServer(dependencies: VaultMcpServerDependencies, o
   }
   register(OBSIDIAN_HELP_TOOL_NAME, "Usage manual; omit topic for the topic index.",
     z.object({ topic: z.string().optional() }).strict(), z.object({ text: z.string() }).strict(),
-    async ({topic}) => {
-      const help = readObsidianHelp(topic);
-      return textProfile ? { text: withTextToolNames(help.text) } : help;
-    }, mapObsidianHelpError);
+    async ({topic}) => readObsidianHelp(topic, helpOptions),
+    error => mapObsidianHelpError(error, helpOptions));
   const listInput = z.object({ path: z.string().optional(),
     maxEntries: z.number().int().min(1).max(MAX_VAULT_LIST_ENTRIES).optional() }).strict();
   const listOutput = z.object({ files: z.array(z.string()) }).strict();
@@ -244,7 +248,10 @@ export function createVaultMcpServer(dependencies: VaultMcpServerDependencies, o
       ({ path, ...options }) => mutations.delete(path, defined(options)),
       (error, args) => mapVaultMutationToolError(error, args.path), { destructive: true, idempotent: false });
   }
-  if (dependencies.readBinary) registerVaultBinaryTool(server, dependencies.readBinary, dependencies.createBinaryLink, textProfile);
+  if (dependencies.readBinary) {
+    registerVaultBinaryTool(server, dependencies.readBinary, dependencies.createBinaryLink, textProfile);
+    helpToolNames.push(VAULT_READ_BINARY_TOOL_NAME);
+  }
   return server;
 }
 
@@ -264,12 +271,6 @@ function presentReadText(result: z.infer<typeof readOutput>, targetType?: string
     ] };
   }
   return { content: [{ type: "text", text: JSON.stringify(result) }] };
-}
-
-function withTextToolNames(text: string): string {
-  // Rewrite only complete tool names, preserving existing aliases and dotted error codes.
-  return text.replace(/\b(?:vault_list|vault_read|vault_get_document_map|search_query)\b(?!\.[A-Za-z0-9_])/gu,
-    name => name + "_text");
 }
 
 function defined(value: Record<string, unknown>): Record<string, unknown> {
