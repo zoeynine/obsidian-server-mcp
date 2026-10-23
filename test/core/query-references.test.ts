@@ -6,6 +6,7 @@ import { queryReferences } from "../../src/core/reference/query-references.js";
 import { ReferenceQueryError, type ReferenceQueryInput } from "../../src/core/reference/types.js";
 import { computeContentVersion, readVaultDocument, VaultDocumentTooLargeError, VaultPathError } from "../../src/core/index.js";
 import { binaryFixture } from "../helpers/binary-fixture.js";
+import { getVersionGuard } from "../../src/core/version/content-version.js";
 
 const root = { directory: "", recursive: true };
 async function fixture(t: TestContext, files: Record<string, string | Buffer>) {
@@ -64,10 +65,12 @@ test("file/heading/block references, display aliases and embeds retain exact sou
   const f = await fixture(t, { "Note.md": body, "refs.md": links });
   const result = await f.query();
   assert.equal(result.target.version, computeContentVersion(body));
+  assert.equal(result.target.versionGuard, getVersionGuard(computeContentVersion(body)));
   assert.equal(result.matches.length, 3);
   assert.deepEqual(result.uncertain.map(item => item.status), ["ambiguous", "ambiguous", "unresolved"]);
   for (const item of [...result.matches, ...result.uncertain]) {
     assert.equal(item.source.version, computeContentVersion(links));
+    assert.equal(item.source.versionGuard, getVersionGuard(computeContentVersion(links)));
     assert.equal(links.slice(item.start, item.end), item.raw);
   }
   const heading = await f.query({ target: { path: "Note.md", heading: ["Parent", "Child"] } });
@@ -84,6 +87,8 @@ test("references support same-note and parent-relative paths, URI escaping and a
   assert.equal(note.matches.length, 2);
   const pdf = await f.query({ target: { path: "a.pdf" } });
   assert.equal(pdf.target.fileExists, true);
+  assert.equal("version" in pdf.target, false);
+  assert.equal("versionGuard" in pdf.target, false);
   assert.equal(pdf.matches.length, 1);
   assert.equal(pdf.matches[0]!.embed, true);
   assert.equal(pdf.uncertain.find(item => item.href.includes("page="))!.status, "unsupported");
@@ -94,6 +99,7 @@ test("missing files, unsupported syntax, invalid percent escapes and out-of-scop
   const f = await fixture(t, { "refs/a.md": "[[./missing]] [[bad [nested](other.md)]] [bad](%GG.md) [[other/File]] [[Alias]] [external](https://example.invalid)", "Other.md": "---\naliases: [Alias]\n---\n" });
   const result = await f.query({ scope: { directory: "refs", recursive: false }, target: { path: "refs/missing.md" } });
   assert.equal(result.target.fileExists, false);
+  assert.equal("versionGuard" in result.target, false);
   assert.equal(result.matches.length, 0);
   assert.ok(result.uncertain.some(item => item.status === "unresolved"));
   assert.ok(result.uncertain.some(item => item.status === "unsupported"));
@@ -124,6 +130,9 @@ test("query budgets fail rather than truncate, including response envelope and f
   }
   await assert.rejects(f.query({ maxFileBytes: 1 }), error => error instanceof VaultDocumentTooLargeError);
   const accepted = await f.query();
+  const outputBytes = Buffer.byteLength(JSON.stringify(accepted), "utf8");
+  assert.equal((await f.query({ maxOutputBytes: outputBytes })).matches.length, 2);
+  await assert.rejects(f.query({ maxOutputBytes: outputBytes - 1 }), code("budget_exceeded"));
   assert.equal((await f.query({ maxTotalBytes: accepted.coverage.bytesRead })).matches.length, 2);
   await assert.rejects(f.query({ maxTotalBytes: accepted.coverage.bytesRead - 1 }));
   for (const value of [-1, 0, NaN, Infinity, 10_001]) await assert.rejects(f.query({ maxResults: value }), code("invalid_input"));

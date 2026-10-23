@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import sharp from "sharp";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { MAX_BINARY_BYTES, computeContentVersion, type VaultBinaryReference } from "../../src/core/index.js";
+import { getVersionGuard } from "../../src/core/version/content-version.js";
 import { VAULT_READ_BINARY_TOOL_NAME } from "../../src/transport/mcp/vault-read-binary.js";
 import { binaryClient, binaryFixture, pdfFixture } from "../helpers/binary-fixture.js";
 import { readToolError } from "./tool-error.js";
@@ -39,6 +40,7 @@ test("explicit bytes travel once as an embedded resource and can be re-read by a
   assert.notEqual(result.isError, true);
   assert.equal(metadata(result)["delivery"], "bytes");
   assert.equal(metadata(result)["mimeType"], "application/octet-stream");
+  assert.equal(metadata(result)["versionGuard"], getVersionGuard(computeContentVersion(data)));
   assert.equal(result.content.length, 1);
   const item = result.content[0];
   assert.ok(item?.type === "resource" && "blob" in item.resource);
@@ -63,6 +65,8 @@ test("images are native MCP image content with compact original/preview metadata
   assert.notEqual(result.isError, true);
   assert.equal(metadata(result)["delivery"], "image");
   assert.equal(metadata(result)["preview"], true);
+  const source = await readFile(path.join(vault, "preview.png"));
+  assert.equal(metadata(result)["versionGuard"], getVersionGuard(computeContentVersion(source)));
   const item = result.content[0];
   assert.ok(item?.type === "image");
   assert.equal(item.mimeType, "image/webp");
@@ -161,8 +165,9 @@ test("image preview fallbacks preserve the exact source version for the download
   assert.equal(result.content[0]?.type, "resource_link");
   assert.equal(metadata(result)["reason"], "image_preview_unavailable");
   assert.equal(metadata(result)["version"], computeContentVersion(data));
+  assert.equal(metadata(result)["versionGuard"], getVersionGuard(computeContentVersion(data)));
   assert.deepEqual(references, [{ path: "disguised.png", mimeType: "image/png",
-    sizeBytes: data.byteLength, version: computeContentVersion(data) }]);
+    sizeBytes: data.byteLength, version: computeContentVersion(data), versionGuard: getVersionGuard(computeContentVersion(data)) }]);
 });
 
 test("link providers receive only a guarded relative reference, and unsafe paths never reach them", async t => {

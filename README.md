@@ -132,10 +132,10 @@ filesystem paths or stacks.
 | `search_query` | JsonLogic over note text, paths and properties, retaining truthy values in `{results}` within scan/result limits |
 | `reference_query` | Read-only references to a file/heading/block within explicit source and resolution scopes; matches and uncertainties with source versions |
 | `tag_list` | Direct tags and nested parents with per-file counts |
-| `vault_write` | Atomic text create/replace; existing files require `ifMatch` |
-| `vault_append` | Atomic append; existing files require `ifMatch`; missing LF added first as in Local REST |
-| `vault_patch` | Generic heading/block/frontmatter instruction; always requires `ifMatch` |
-| `vault_replace_text` | Atomic literal replacement of one unique exact string in an existing text file; always requires `ifMatch` |
+| `vault_write` | Atomic text create/replace; existing files require `ifMatch` or `ifMatchGuard` |
+| `vault_append` | Atomic append; existing files require `ifMatch` or `ifMatchGuard`; missing LF added first as in Local REST |
+| `vault_patch` | Generic heading/block/frontmatter instruction; requires `ifMatch` or `ifMatchGuard` |
+| `vault_replace_text` | Atomic literal replacement of one unique exact string in an existing text file; requires `ifMatch` or `ifMatchGuard` |
 | `vault_move` | Move a file; destination suffix and optional `allowOverwrite` follow Local REST |
 | `vault_delete` | Recoverable Vault-local trash by default; `permanent: true` permanently deletes a file |
 
@@ -176,12 +176,12 @@ in one text block. Business errors retain `isError: true` and their existing
 payloads. Chinese characters are emitted directly.
 
 `vault_read_text` presents whole-file reads in two text blocks: the first contains
-all metadata (`path`, `version`, `tags`, `frontmatter`, `stat`) plus
+all metadata (`path`, `version`, `versionGuard`, `tags`, `frontmatter`, `stat`) plus
 `textField: "content"`; the second is the original `content` string. Heading/block
-reads also use two blocks: `{path,version,textField:"result"}` and the reader's
+reads also use two blocks: `{path,version,versionGuard,textField:"result"}` and the reader's
 unchanged result string. Empty text remains an empty second block. No trimming,
 unescaping, newline conversion or code fences are applied. Frontmatter target
-reads retain single-block `{path,version,result}` JSON for every value type,
+reads retain single-block `{path,version,versionGuard,result}` JSON for every value type,
 including strings. Heading/block reads retain their existing semantic behavior,
 including relative heading levels; use a whole-file read for exact replacement.
 
@@ -248,8 +248,10 @@ Use a whole-file read for full context or an exact source slice for replacement.
 Targeted heading levels are relative; inspect the whole file or map to verify
 stored nesting after a structural change.
 
-Both map and read return the exact-byte `version` used as `ifMatch` by later
-mutations. A successful read is evidence for that version, not a lock on the note.
+Both map and read return the full exact-byte `version` and a 16-hex
+`versionGuard`. Copy either `version` into `ifMatch` or `versionGuard` into
+`ifMatchGuard` for later mutations, never both. The short guard has lower
+collision strength; see guide `write`. A read is not a lock on the note.
 If a write reports a conflict, reread and reconcile before another attempt.
 `maxBytes` admits the entire source document, even for a small target; narrowing
 the target does not bypass file-size limits or frontmatter parsing.
@@ -341,7 +343,7 @@ Ask for tool topic `tag_list` for its limits and result example, or
 
 Use `vault_get_document_map` to discover an exact semantic target and its
 version, then `vault_patch` to edit that heading, block or property with
-`ifMatch`. Choose a scope before writing content: a section body, its marker,
+`ifMatch` or `ifMatchGuard`. Choose a scope before writing content: a section body, its marker,
 the whole section or a move of its parent relationship have different effects.
 `within: 0` selects the first direct body block when child sections should be
 retained; choose the appropriate index for another body block.
@@ -351,7 +353,7 @@ Heading content uses relative levels. In the default `content` scope, input
 prepend/append it is relative to the target's actual parent; skipped levels
 can change nesting. Whole-subtree replacement with children fails with
 `vault_semantic.subtree_confirmation_required` unless explicitly allowed with
-`allowSubtreeReplacement: true` as well as a current `ifMatch`.
+`allowSubtreeReplacement: true` as well as a current `ifMatch` or `ifMatchGuard`.
 
 Choose typed `value` for a frontmatter property and `destination` for a
 heading move. For a literal exact source edit use `vault_replace_text`; for
@@ -373,13 +375,36 @@ Choose the operation that matches the intended change:
 - `vault_replace_text`: replace one unique literal slice from a whole-file read.
 - `vault_patch`: edit a semantic heading, body block or typed property.
 
-For an existing file, read its exact-byte `version` with `vault_read` or
-`vault_get_document_map` and pass it as `ifMatch`. Exact replacement needs
-the original slice and version from the same whole-file read. Create with
-write/append without `ifMatch` only when the path is missing. A conflict calls
-for rereading and reconciling; mutations never transparently retry.
+For an existing file, read with `vault_read` or `vault_get_document_map` and
+copy the returned `versionGuard` unchanged into `ifMatchGuard`. Alternatively,
+pass the full `version` as `ifMatch`; its strict exact-match contract is unchanged.
+Supply exactly one: both together fail with `vault_mutation.conflicting_preconditions`,
+even when they agree. Exact replacement needs the original slice and token from
+the same whole-file read. Create with write/append without either token only
+when the path is missing. A token for a missing file cannot create it.
 
-Successful receipts report the saved version and before/after UTF-8 byte sizes.
+`versionGuard` is exactly 16 lowercase hex characters: the first 64 bits of
+the same file-byte SHA-256, returned by the server so callers need not slice
+or count characters. It has no session, cache, lease, expiry or authorization
+meaning. Wrong or stale values conflict; malformed guards are refused. On any
+conflict, reread and reconcile rather than copying a token from an error or
+automatically retrying. This is content-based, so restoring identical bytes
+restores both tokens; neither token tracks intervening edit history.
+
+The short guard is a convenience for non-adversarial edits, not full SHA-256
+collision resistance. A random unequal pair collides with probability about
+2^-64; birthday collisions become plausible around 2^32 distinct versions.
+Use full `ifMatch` when stronger collision resistance is needed. After the
+initial check, the server pins the full SHA-256 for in-flight revalidation,
+retaining the existing per-path locking and atomic publication limits.
+
+Successful read/map/search/reference results and text-write receipts include
+`versionGuard` wherever they include `version`. Binary results include both
+only when complete original bytes were read; download-only links need not
+have either. Move/delete receipts, directory listings and tag counts gain no
+token. Both profiles use the same rules; text reads put the guard in metadata.
+
+Successful receipts report both saved tokens and before/after UTF-8 byte sizes.
 They establish that bytes were committed, not that the edit fulfilled its intent
 or preserved Markdown structure. Inspect content or a map when that matters.
 A saved-note cleanup warning means the write succeeded; do not append again.
@@ -412,7 +437,7 @@ Ask for the relevant tool topic for its parameter limits and actionable errors.
 The mutation path is deliberately small:
 
 1. Serialize the relative path across store instances in this process; safely
-   read existing bytes and require exact-byte `ifMatch` for existing write/append
+   read existing bytes and require `ifMatch` or `ifMatchGuard` for existing write/append
    and every patch/exact replacement. Validate the prepared text before changing files.
 2. Create missing parent directories through the shared sandbox. Write a hidden
    `.obsidian-mcp-<random>.tmp` beside the target using exclusive creation.
@@ -450,7 +475,7 @@ on each deployment's operating system and filesystem.
 Stdio requires only `OBSIDIAN_VAULT_ROOT`; no staging-root or policy-module
 configuration is needed. Protocol output uses stdout; diagnostics use stderr.
 Write/append/patch/exact-replacement success is a compact `message: "OK"`
-receipt with path, exact-byte version, `beforeSizeBytes`, final `sizeBytes`,
+receipt with path, exact-byte version, versionGuard, `beforeSizeBytes`, final `sizeBytes`,
 `created` and any warnings. Exact replacement adds `replacementCount: 1`;
 the note body is not echoed.
 
@@ -464,7 +489,8 @@ scopes before the move; outside-scope incoming links remain unknown.
 
 Move overwrites require `allowOverwrite`. Delete defaults to recoverable
 Vault-local trash; `permanent: true` is irreversible. Both accept an optional
-exact-byte `ifMatch` for the source. Omitting it acts on the current path;
+`ifMatch` or `ifMatchGuard` for the source, never both (see guide `write`).
+Omitting both acts on the current path;
 on move it never protects the destination's version. Directories and files
 with additional hard links are refused.
 

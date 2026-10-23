@@ -96,7 +96,8 @@ export async function queryReferences(sandbox: VaultPathSandbox, readDocument: V
         if (resolved.status === "resolved" && resolved.destination) resolved = resolveFragment(resolved.destination, targetParsed);
         if (resolved.status === "resolved" && requested.status !== "resolved") resolved = { ...resolved, status: requested.status, reason: "requested_target_" + requested.reason };
         if (resolved.status === "resolved" && !matchesTarget(resolved.destination!, target, targetParsed)) continue;
-        const occurrence: ReferenceOccurrence = { ...link, source: { path: document.path, version: document.version }, ...resolved };
+        const occurrence: ReferenceOccurrence = { ...link,
+          source: { path: document.path, version: document.version, versionGuard: document.versionGuard }, ...resolved };
         if (matches.length + uncertain.length >= limits.maxResults) throw new ReferenceQueryError("budget_exceeded", "maxResults");
         outputBytes += Buffer.byteLength(JSON.stringify(occurrence), "utf8");
         if (outputBytes > limits.maxOutputBytes) throw new ReferenceQueryError("budget_exceeded", "maxOutputBytes");
@@ -118,7 +119,8 @@ export async function queryReferences(sandbox: VaultPathSandbox, readDocument: V
     await resolution.verify();
     if (sources !== resolution) await sources.verify();
     checkTime();
-    const result: ReferenceQueryResult = { target: { ...target, fileExists: exists, status: requested.status, reason: requested.reason, ...(targetDocument ? { version: targetDocument.version } : {}) },
+    const result: ReferenceQueryResult = { target: { ...target, fileExists: exists, status: requested.status, reason: requested.reason,
+      ...(targetDocument ? { version: targetDocument.version, versionGuard: targetDocument.versionGuard } : {}) },
       scope, resolutionScope,
       coverage: { complete: true, incomingOutsideScope: "unknown", atomicSnapshot: false, offsetUnit: "utf16", positionBase: 1,
         sourcesScanned: sourcePaths.length, entriesVisited, bytesRead,

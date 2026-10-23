@@ -1,10 +1,9 @@
 import * as assert from "node:assert/strict";
 import { link, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import * as path from "node:path";
 import test, { type TestContext } from "node:test";
 import { VaultPathError, VaultPathSandbox } from "../../src/core/path/vault-path.js";
-import { computeContentVersion, VersionConflictError } from "../../src/core/version/content-version.js";
+import { computeContentVersion, getVersionGuard, VersionConflictError, VersionGuardConflictError } from "../../src/core/version/content-version.js";
 import { VaultTextError } from "../../src/core/file/text-policy.js";
 import { InvalidVaultDocumentEncodingError, readVaultDocument } from "../../src/core/file/read-vault-document.js";
 import { getVaultDocumentMap, listVaultFiles, listVaultTags, searchVaultQuery } from "../../src/core/index.js";
@@ -12,7 +11,9 @@ import { nativeMutationIO, type MutationIO } from "../../src/core/mutation/mutat
 import { VaultMutationError, VaultMutationStore } from "../../src/core/mutation/vault-mutations.js";
 
 async function fixture(t: TestContext, options: { io?: MutationIO; maxBytes?: number } = {}) {
-  const root = await mkdtemp(path.join(tmpdir(), "obsidian-mutation-"));
+  const temporary = path.resolve(".test-dist", ".test-tmp");
+  await mkdir(temporary, { recursive: true });
+  const root = await mkdtemp(path.join(temporary, "obsidian-mutation-"));
   const vault = path.join(root, "vault");
   await mkdir(vault);
   t.after(async () => { await rm(root, { recursive: true, force: true }); });
@@ -137,19 +138,24 @@ test("generic frontmatter and heading patch use the shared commit path", async t
 });
 
 test("same-path requests serialize across instances and stale append/patch are never retried", async t => {
-  let writes = 0;
-  const f = await fixture(t, { io: { ...nativeMutationIO, writeFile: async (h, bytes) => { writes++; await nativeMutationIO.writeFile(h, bytes); } } });
-  await writeFile(path.join(f.vault, "note.md"), "# Title\nbody");
-  const second = await VaultMutationStore.create(f.sandbox, f.options);
-  const ifMatch = computeContentVersion("# Title\nbody");
-  const results = await Promise.allSettled([
-    f.store.append("note.md", "one", { ifMatch }),
-    second.patch("note.md", { targetType: "heading", target: ["Title"], operation: "append", content: "two", ifMatch }),
-  ]);
-  assert.equal(results.filter(r => r.status === "fulfilled").length, 1);
-  assert.ok(results.some(r => r.status === "rejected" && r.reason instanceof VersionConflictError));
-  assert.equal(writes, 1);
-  assert.equal(await readFile(path.join(f.vault, "note.md"), "utf8"), "# Title\nbody\none");
+  for (const kind of ["full", "guard"] as const) await t.test(kind, async t => {
+    let writes = 0;
+    const f = await fixture(t, { io: { ...nativeMutationIO, writeFile: async (h, bytes) => { writes++; await nativeMutationIO.writeFile(h, bytes); } } });
+    await writeFile(path.join(f.vault, "note.md"), "# Title\nbody");
+    const second = await VaultMutationStore.create(f.sandbox, f.options);
+    const version = computeContentVersion("# Title\nbody");
+    const options = kind === "full" ? { ifMatch: version } : { ifMatchGuard: getVersionGuard(version) };
+    const results = await Promise.allSettled([
+      f.store.append("note.md", "one", options),
+      second.patch("note.md", { targetType: "heading", target: ["Title"], operation: "append", content: "two", ...options }),
+    ]);
+    assert.equal(results.filter(r => r.status === "fulfilled").length, 1);
+    const conflict = kind === "full" ? VersionConflictError : VersionGuardConflictError;
+    assert.ok(results.some(r => r.status === "rejected" && r.reason instanceof conflict));
+    assert.equal(writes, 1);
+    assert.equal(await readFile(path.join(f.vault, "note.md"), "utf8"), "# Title\nbody\none");
+    assert.deepEqual(await readdir(f.vault), ["note.md"]);
+  });
 });
 
 test("different paths progress independently while another write is paused", async t => {
@@ -188,21 +194,25 @@ test("write, fsync and replace failures retain original bytes, clean temps and r
 });
 
 test("final exact-byte revalidation catches external changes for append and patch without retry", async t => {
-  for (const operation of ["append", "patch"]) {
-    let vault = ""; let publishes = 0; let writes = 0;
-    const f = await fixture(t, { io: { ...nativeMutationIO,
-      writeFile: async (h, bytes) => { writes++; await nativeMutationIO.writeFile(h, bytes); },
-      syncFile: async h => { await nativeMutationIO.syncFile(h); await writeFile(path.join(vault, "note.md"), "SYNC"); },
-      rename: async (a, b) => { publishes++; await nativeMutationIO.rename(a, b); },
-    } });
-    vault = f.vault;
-    await writeFile(path.join(vault, "note.md"), "# Title\nold");
-    const ifMatch = computeContentVersion("# Title\nold");
-    await assert.rejects(operation === "append" ? f.store.append("note.md", "new", { ifMatch }) :
-      f.store.patch("note.md", {targetType: "heading", target: ["Title"], operation: "append", content: "new", ifMatch}), VersionConflictError);
-    assert.equal(publishes, 0); assert.equal(writes, 1);
-    assert.equal(await readFile(path.join(vault, "note.md"), "utf8"), "SYNC");
-    assert.deepEqual(await readdir(vault), ["note.md"]);
+  for (const operation of ["append", "patch"]) for (const kind of ["full", "guard"] as const) {
+    await t.test(`${operation} with ${kind}`, async t => {
+      let vault = ""; let publishes = 0; let writes = 0;
+      const f = await fixture(t, { io: { ...nativeMutationIO,
+        writeFile: async (h, bytes) => { writes++; await nativeMutationIO.writeFile(h, bytes); },
+        syncFile: async h => { await nativeMutationIO.syncFile(h); await writeFile(path.join(vault, "note.md"), "SYNC"); },
+        rename: async (a, b) => { publishes++; await nativeMutationIO.rename(a, b); },
+      } });
+      vault = f.vault;
+      await writeFile(path.join(vault, "note.md"), "# Title\nold");
+      const version = computeContentVersion("# Title\nold");
+      const options = kind === "full" ? { ifMatch: version } : { ifMatchGuard: getVersionGuard(version) };
+      await assert.rejects(operation === "append" ? f.store.append("note.md", "new", options) :
+        f.store.patch("note.md", {targetType: "heading", target: ["Title"], operation: "append", content: "new", ...options}),
+      (error: unknown) => error instanceof VersionConflictError && error.expected === version && error.actual === computeContentVersion("SYNC"));
+      assert.equal(publishes, 0); assert.equal(writes, 1);
+      assert.equal(await readFile(path.join(vault, "note.md"), "utf8"), "SYNC");
+      assert.deepEqual(await readdir(vault), ["note.md"]);
+    });
   }
 });
 

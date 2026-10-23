@@ -1,6 +1,5 @@
 import * as assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { buildModel, projectMap } from "markdown-patch";
@@ -10,12 +9,13 @@ import { nativeMutationIO } from "../../src/core/mutation/mutation-io.js";
 import { VaultMutationStore } from "../../src/core/mutation/vault-mutations.js";
 import { parseVaultRelativePath, VaultPathSandbox } from "../../src/core/path/vault-path.js";
 import { prepareVaultPatch } from "../../src/core/patch/prepare-vault-patch.js";
-import { computeContentVersion, VersionConflictError } from "../../src/core/version/content-version.js";
+import { computeContentVersion, getVersionGuard, VersionConflictError, VersionGuardConflictError } from "../../src/core/version/content-version.js";
 
 const section = "# A\nintro\n\n## B\nkeep B\n\n## C\nkeep C\n\n# Outside\nstay\n";
 const replace = { targetType: "heading", target: ["A"], operation: "replace", content: "new body" };
 function document(content: string): VaultDocumentReadResult {
   return { path: parseVaultRelativePath("note.md"), content, version: computeContentVersion(content),
+    versionGuard: getVersionGuard(computeContentVersion(content)),
     modifiedAtMs: 0, sizeBytes: Buffer.byteLength(content) };
 }
 function prepare(source: string, input: Record<string, unknown>) {
@@ -80,7 +80,7 @@ test("leaf, within, rename and move edits keep their existing heading behavior",
   assert.throws(() => prepare("# A\nintro\n\nChild\n-----\nkeep\n", replace), semantic("subtree_confirmation_required"));
 });
 
-test("subtree confirmation is typed, narrowly scoped and never bypasses ifMatch", () => {
+test("subtree confirmation is typed, narrowly scoped and never bypasses version preconditions", () => {
   for (const allowSubtreeReplacement of ["true", 1, null]) {
     assert.throws(() => prepare(section, { ...replace, allowSubtreeReplacement }), semantic("invalid_instruction"));
   }
@@ -92,33 +92,52 @@ test("subtree confirmation is typed, narrowly scoped and never bypasses ifMatch"
   }
   assert.throws(() => prepare(section, { ...replace, allowSubtreeReplacement: true,
     ifMatch: computeContentVersion("stale") }), VersionConflictError);
+  const ifMatchGuard = getVersionGuard(computeContentVersion(section));
+  assert.throws(() => prepareVaultPatch(document(section), { ...replace, ifMatchGuard }), semantic("subtree_confirmation_required"));
+  assert.throws(() => prepareVaultPatch(document(section), { ...replace, allowSubtreeReplacement: true,
+    ifMatchGuard: getVersionGuard(computeContentVersion("stale")) }), VersionGuardConflictError);
+  const next = prepareVaultPatch(document(section), { ...replace, allowSubtreeReplacement: true, ifMatchGuard }).document;
+  assert.doesNotMatch(next, /keep B|keep C/u);
 });
 
 test("blocked subtree replacements and stale confirmations never stage or publish bytes", async t => {
-  const root = await mkdtemp(path.join(tmpdir(), "obsidian-patch-guard-"));
-  const vault = path.join(root, "vault");
-  await mkdir(vault);
-  t.after(() => rm(root, { recursive: true, force: true }));
-  const source = "\uFEFF" + section.replace(/\n/gu, "\r\n");
-  const file = path.join(vault, "note.md");
-  await writeFile(file, source);
-  let writes = 0;
-  const store = await VaultMutationStore.create(await VaultPathSandbox.create(vault), { io: {
-    ...nativeMutationIO, writeFile: async (handle, bytes) => { writes++; await nativeMutationIO.writeFile(handle, bytes); },
-  } });
-  await assert.rejects(store.patch("note.md", { ...replace, ifMatch: computeContentVersion(source) }), semantic("subtree_confirmation_required"));
-  await assert.rejects(store.patch("note.md", { ...replace, allowSubtreeReplacement: true,
-    ifMatch: computeContentVersion("stale") }), VersionConflictError);
-  assert.equal(writes, 0);
-  assert.equal(await readFile(file, "utf8"), source);
-  assert.deepEqual(await readdir(vault), ["note.md"]);
-  const result = await store.patch("note.md", { ...replace, allowSubtreeReplacement: true, ifMatch: computeContentVersion(source) });
-  const saved = await readFile(file, "utf8");
-  assert.equal(writes, 1);
-  assert.ok(saved.startsWith("\uFEFF"));
-  assert.doesNotMatch(saved, /(?<!\r)\n/u);
-  assert.doesNotMatch(saved, /keep B|keep C/u);
-  assert.equal(result.version, computeContentVersion(saved));
+  for (const kind of ["full", "guard"] as const) await t.test(kind, async t => {
+    const temporary = path.resolve(".test-dist", ".test-tmp");
+    await mkdir(temporary, { recursive: true });
+    const root = await mkdtemp(path.join(temporary, "obsidian-patch-guard-"));
+    const vault = path.join(root, "vault");
+    await mkdir(vault);
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const source = "\uFEFF" + section.replace(/\n/gu, "\r\n");
+    const file = path.join(vault, "note.md");
+    await writeFile(file, source);
+    let writes = 0; let publishes = 0;
+    const store = await VaultMutationStore.create(await VaultPathSandbox.create(vault), { io: {
+      ...nativeMutationIO,
+      writeFile: async (handle, bytes) => { writes++; await nativeMutationIO.writeFile(handle, bytes); },
+      rename: async (from, to) => { publishes++; await nativeMutationIO.rename(from, to); },
+    } });
+    const version = computeContentVersion(source);
+    const stale = computeContentVersion("stale");
+    const options = kind === "full" ? { ifMatch: version } : { ifMatchGuard: getVersionGuard(version) };
+    const staleOptions = kind === "full" ? { ifMatch: stale } : { ifMatchGuard: getVersionGuard(stale) };
+    await assert.rejects(store.patch("note.md", { ...replace, ...options }), semantic("subtree_confirmation_required"));
+    await assert.rejects(store.patch("note.md", { ...replace, allowSubtreeReplacement: true, ...staleOptions }),
+      kind === "full" ? VersionConflictError : VersionGuardConflictError);
+    assert.equal(writes, 0);
+    assert.equal(publishes, 0);
+    assert.equal(await readFile(file, "utf8"), source);
+    assert.deepEqual(await readdir(vault), ["note.md"]);
+    const result = await store.patch("note.md", { ...replace, allowSubtreeReplacement: true, ...options });
+    const saved = await readFile(file, "utf8");
+    assert.equal(writes, 1);
+    assert.equal(publishes, 1);
+    assert.ok(saved.startsWith("\uFEFF"));
+    assert.doesNotMatch(saved, /(?<!\r)\n/u);
+    assert.doesNotMatch(saved, /keep B|keep C/u);
+    assert.equal(result.version, computeContentVersion(saved));
+    assert.equal(result.versionGuard, getVersionGuard(result.version));
+  });
 });
 
 test("flow and block array merges preserve unrelated source, BOM and line endings", () => {

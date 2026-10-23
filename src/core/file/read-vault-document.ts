@@ -10,7 +10,9 @@ import {
 } from "../path/vault-path.js";
 import {
   computeContentVersion,
+  getVersionGuard,
   type ContentVersion,
+  type VersionGuard,
 } from "../version/content-version.js";
 
 export const DEFAULT_MAX_VAULT_DOCUMENT_BYTES = 4 * 1024 * 1024;
@@ -36,6 +38,7 @@ export interface VaultDocumentReadResult {
   readonly path: VaultRelativePath;
   readonly sizeBytes: number;
   readonly version: ContentVersion;
+  readonly versionGuard: VersionGuard;
 }
 
 export type VaultDocumentReadErrorCode =
@@ -149,6 +152,7 @@ export interface VaultFileInfo {
 export interface VaultFileBytes extends VaultFileInfo {
   readonly bytes: Buffer;
   readonly version: ContentVersion;
+  readonly versionGuard: VersionGuard;
 }
 
 /** Opens and checks read access without loading a large attachment into memory. */
@@ -164,7 +168,8 @@ export async function readVaultFileBytes(
   return withVaultFile(sandbox, inputPath, async (handle, stats) => {
     if (stats.size > BigInt(maxBytes)) throw new VaultDocumentTooLargeError(inputPath, stats.size, maxBytes);
     const bytes = await readBounded(handle, inputPath, maxBytes);
-    return { bytes, version: computeContentVersion(bytes) };
+    const version = computeContentVersion(bytes);
+    return { bytes, version, versionGuard: getVersionGuard(version) };
   });
 }
 

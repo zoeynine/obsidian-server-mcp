@@ -59,7 +59,7 @@ tool discovery and the binary help topic after changing an embedded composition.
 
 ## Link provider contract
 
-The provider receives only `{path, mimeType, sizeBytes, version?}` after a guarded
+The provider receives only `{path, mimeType, sizeBytes, version?, versionGuard?}` after a guarded
 file open and read-access check. `path` is Vault-relative, never an absolute host
 path. Non-preview `auto`, explicit `link` and image fallbacks all call this same
 provider. The package does not fetch the link or verify its serving implementation.

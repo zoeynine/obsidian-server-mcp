@@ -72,7 +72,17 @@ export {
   assertVersionMatch,
   computeContentVersion,
   parseContentVersion,
+  InvalidVersionGuardError,
+  VersionGuardConflictError,
+  ConflictingVersionPreconditionsError,
+  getVersionGuard,
+  parseVersionGuard,
+  parseVersionPrecondition,
+  assertVersionPrecondition,
   type ContentVersion,
+  type VersionGuard,
+  type VersionPrecondition,
+  type VersionPreconditionInput,
 } from "./version/content-version.js";
 
 export { extractDocumentTags } from "./tag/extract-document-tags.js";

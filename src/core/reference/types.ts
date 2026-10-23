@@ -1,3 +1,5 @@
+import type { VersionGuard } from "../version/content-version.js";
+
 export interface ReferenceScope { readonly directory: string; readonly recursive: boolean }
 export interface ReferenceTarget { readonly path: string; readonly heading?: readonly string[]; readonly block?: string }
 export interface ReferenceQueryInput {
@@ -45,14 +47,15 @@ export interface ParsedReferences {
 }
 export type ReferenceStatus = "resolved" | "ambiguous" | "unresolved" | "unsupported" | "unknown";
 export interface ReferenceOccurrence extends ParsedReference {
-  readonly source: { readonly path: string; readonly version: string };
+  readonly source: { readonly path: string; readonly version: string; readonly versionGuard: VersionGuard };
   readonly status: ReferenceStatus;
   readonly reason: string;
   readonly destination?: ReferenceTarget;
   readonly candidates?: readonly string[];
 }
 export interface ReferenceQueryResult {
-  readonly target: ReferenceTarget & { readonly fileExists: boolean; readonly status: ReferenceStatus; readonly reason: string; readonly version?: string };
+  readonly target: ReferenceTarget & { readonly fileExists: boolean; readonly status: ReferenceStatus; readonly reason: string;
+    readonly version?: string; readonly versionGuard?: VersionGuard };
   readonly scope: ReferenceScope;
   readonly resolutionScope: ReferenceScope;
   readonly coverage: {

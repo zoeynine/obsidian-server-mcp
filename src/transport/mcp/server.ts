@@ -43,6 +43,10 @@ export const VAULT_MOVE_TOOL_NAME = "vault_move";
 export const VAULT_DELETE_TOOL_NAME = "vault_delete";
 
 const version = z.string().regex(/^sha256:[0-9a-f]{64}$/u);
+const versionGuard = z.string().length(16).regex(/^[0-9a-f]{16}$/u);
+const mutationPreconditions = { ifMatch: version.optional(), ifMatchGuard: versionGuard.optional() };
+const hasMutationPrecondition = (input: { ifMatch?: string | undefined; ifMatchGuard?: string | undefined }) =>
+  input.ifMatch !== undefined || input.ifMatchGuard !== undefined;
 const maxBytes = z.number().int().min(0).max(MAX_VAULT_DOCUMENT_BYTES).optional();
 const scanShape = {
   maxEntries: z.number().int().min(1).max(MAX_SEARCH_QUERY_ENTRIES).optional()
@@ -56,9 +60,9 @@ const scanShape = {
 };
 const headingTree: z.ZodType<Record<string, unknown>> = z.lazy(() => z.record(z.string(), headingTree));
 const readOutput = z.union([
-  z.object({ path: z.string(), version, content: z.string(), tags: z.array(z.string()), frontmatter: z.record(z.string(), z.json()),
+  z.object({ path: z.string(), version, versionGuard, content: z.string(), tags: z.array(z.string()), frontmatter: z.record(z.string(), z.json()),
     stat: z.object({ ctime: z.number().finite(), mtime: z.number().finite(), size: z.number().int().nonnegative() }).strict() }).strict(),
-  z.object({ path: z.string(), version, result: z.json() }).strict(),
+  z.object({ path: z.string(), version, versionGuard, result: z.json() }).strict(),
 ]);
 const readInput = z.object({ path: z.string(), maxBytes,
   targetType: z.enum(["heading", "block", "frontmatter"]).optional(),
@@ -152,28 +156,28 @@ export function createVaultMcpServer(dependencies: VaultMcpServerDependencies, o
   const runRead = ({path, ...readOptions}: z.infer<typeof readInput>) =>
     dependencies.readDocument(path, defined(readOptions) as ReadVaultNoteOptions);
   if (!textProfile) {
-    register(VAULT_READ_TOOL_NAME, "Read a Vault text file or target with its version. Discover targets via vault_get_document_map; targeted heading levels are relative. No link graph.",
+    register(VAULT_READ_TOOL_NAME, "Read a Vault text file or target with version and versionGuard. Discover targets via vault_get_document_map; targeted heading levels are relative. No link graph.",
       readInput, readOutput, runRead, mapVaultReadToolError);
   }
   if (textProfile || options.enableTextRead === true) {
     register(VAULT_READ_TEXT_TOOL_NAME, textProfile
-      ? "Read a Vault text file or target. Full-file and heading/block reads return two text blocks: metadata JSON with textField naming content/result, then the unchanged reader text. Frontmatter values remain single-block typed JSON. Same read limits and exact-byte version; use version as ifMatch. Discover targets via vault_get_document_map_text; targeted heading levels are relative, so copy exact replacement text from a full-file read."
-      : `Read a Vault text file or target as text-only JSON. Same inputs, read limits and exact-byte version as vault_read. Discover targets via ${VAULT_GET_DOCUMENT_MAP_TOOL_NAME}; targeted heading levels are relative.`,
+      ? "Read a Vault text file or target. Full-file and heading/block reads return two text blocks: metadata JSON with textField naming content/result, then the unchanged reader text. Frontmatter values remain single-block typed JSON. Same read limits; copy version as ifMatch or versionGuard as ifMatchGuard. Discover targets via vault_get_document_map_text; targeted heading levels are relative, so copy exact replacement text from a full-file read."
+      : `Read a Vault text file or target as text-only JSON. Same inputs, read limits, version and versionGuard as vault_read. Discover targets via ${VAULT_GET_DOCUMENT_MAP_TOOL_NAME}; targeted heading levels are relative.`,
       readInput, readOutput, runRead, mapVaultReadToolError, undefined, true,
       textProfile ? (result, args) => presentReadText(result as z.infer<typeof readOutput>, args.targetType) : undefined);
   }
   const documentMapInput = z.object({ path: z.string(), maxBytes,
     maxHeadings: z.number().int().min(1).max(MAX_DOCUMENT_MAP_HEADINGS).optional() }).strict();
-  const documentMapOutput = z.object({ path: z.string(), version, headings: headingTree,
+  const documentMapOutput = z.object({ path: z.string(), version, versionGuard, headings: headingTree,
     blocks: z.array(z.string()), frontmatterFields: z.array(z.string()) }).strict();
   const runDocumentMap = ({path, ...mapOptions}: z.infer<typeof documentMapInput>) =>
     dependencies.getDocumentMap(path, defined(mapOptions) as GetVaultDocumentMapOptions);
   const mapDocumentMapError = (error: unknown, args: z.infer<typeof documentMapInput>) => mapVaultDocumentMapToolError(error, args.path);
   if (!textProfile) {
-    register(VAULT_GET_DOCUMENT_MAP_TOOL_NAME, "Get heading paths, block IDs, property names and exact-byte version. Copy returned keys unchanged for targeted reads/patches.",
+    register(VAULT_GET_DOCUMENT_MAP_TOOL_NAME, "Get heading paths, block IDs, property names, version and versionGuard. Copy returned keys unchanged for targeted reads/patches.",
       documentMapInput, documentMapOutput, runDocumentMap, mapDocumentMapError);
   } else {
-    register(VAULT_GET_DOCUMENT_MAP_TEXT_TOOL_NAME, "Get heading paths, block IDs, property names and exact-byte version as text-only JSON. Same inputs and limits as vault_get_document_map. Copy returned keys unchanged for targeted reads/patches.",
+    register(VAULT_GET_DOCUMENT_MAP_TEXT_TOOL_NAME, "Get heading paths, block IDs, property names, version and versionGuard as text-only JSON. Same inputs and limits as vault_get_document_map. Copy returned keys unchanged for targeted reads/patches.",
       documentMapInput, documentMapOutput, runDocumentMap, mapDocumentMapError, undefined, true);
   }
   const searchInput = z.object({ ...scanShape, query: z.record(z.string(), z.json()),
@@ -181,7 +185,7 @@ export function createVaultMcpServer(dependencies: VaultMcpServerDependencies, o
       .describe('Optional scan scope; omit for a recursive whole-Vault scan. directory "" is root; recursive=false scans only direct child files.'),
     maxResults: z.number().int().min(1).max(MAX_SEARCH_QUERY_RESULTS).optional()
       .describe("Optional match cap, not truncation; omit for defaults.") }).strict();
-  const searchOutput = z.object({ results: z.array(z.object({ filename: z.string(), version, result: z.json() }).strict()) }).strict();
+  const searchOutput = z.object({ results: z.array(z.object({ filename: z.string(), version, versionGuard, result: z.json() }).strict()) }).strict();
   const runSearch = async ({query, ...searchOptions}: z.infer<typeof searchInput>) =>
     ({ results: await dependencies.searchQuery(query, defined(searchOptions) as SearchVaultQueryOptions) });
   if (!textProfile) {
@@ -198,27 +202,28 @@ export function createVaultMcpServer(dependencies: VaultMcpServerDependencies, o
     (options) => dependencies.tagList(defined(options) as ListVaultTagsOptions), mapTagListToolError);
   const mutations = dependencies.mutations;
   if (mutations) {
-    const mutationOutput = z.object({ message: z.literal("OK"), path: z.string(), version,
+    const mutationOutput = z.object({ message: z.literal("OK"), path: z.string(), version, versionGuard,
       beforeSizeBytes: z.number().int().nonnegative(), sizeBytes: z.number().int().nonnegative(), created: z.boolean(),
       warnings: z.array(z.object({ code: z.enum(["heading-depth-overflow", "temporary_cleanup_failed"]), message: z.string() }).strict()).optional(),
     }).strict();
-    const textInput = z.object({ path: z.string(), content: z.string().max(MAX_VAULT_DOCUMENT_BYTES), ifMatch: version.optional() }).strict();
-    register(VAULT_WRITE_TOOL_NAME, "Create or replace UTF-8 text. Existing files require ifMatch; no force bypass. Creates parents. Binary/NUL refused; no automatic retry.",
+    const textInput = z.object({ path: z.string(), content: z.string().max(MAX_VAULT_DOCUMENT_BYTES), ...mutationPreconditions }).strict();
+    register(VAULT_WRITE_TOOL_NAME, "Create or replace UTF-8 text. Existing files require ifMatch or ifMatchGuard (copy versionGuard). Creates parents. Binary/NUL refused; no automatic retry.",
       textInput, mutationOutput,
-      ({ path, content, ifMatch }) => mutations.write(path, content, ifMatch === undefined ? {} : { ifMatch }),
+      ({ path, content, ...preconditions }) => mutations.write(path, content, defined(preconditions)),
       (error, args) => mapVaultMutationToolError(error, args.path), { destructive: true, idempotent: true });
-    register(VAULT_APPEND_TOOL_NAME, "Append UTF-8 text; creates missing files. Existing files require ifMatch; missing final LF is added first. Binary/NUL refused; no automatic retry.",
+    register(VAULT_APPEND_TOOL_NAME, "Append UTF-8 text; creates missing files. Existing files require ifMatch or ifMatchGuard (copy versionGuard); missing final LF is added first. Binary/NUL refused; no automatic retry.",
       textInput, mutationOutput,
-      ({ path, content, ifMatch }) => mutations.append(path, content, ifMatch === undefined ? {} : { ifMatch }),
+      ({ path, content, ...preconditions }) => mutations.append(path, content, defined(preconditions)),
       (error, args) => mapVaultMutationToolError(error, args.path), { destructive: false, idempotent: false });
-    register(VAULT_REPLACE_TEXT_TOOL_NAME, `Replace one unique, case-sensitive literal match in an existing UTF-8 file. Copy exact oldText and version from a whole-file ${textProfile ? VAULT_READ_TEXT_TOOL_NAME : VAULT_READ_TOOL_NAME}; pass version as ifMatch. Empty newText deletes. No automatic retry.`,
+    register(VAULT_REPLACE_TEXT_TOOL_NAME, `Replace one unique, case-sensitive literal match in an existing UTF-8 file. Copy exact oldText from a whole-file ${textProfile ? VAULT_READ_TEXT_TOOL_NAME : VAULT_READ_TOOL_NAME}; copy version as ifMatch or versionGuard as ifMatchGuard. Empty newText deletes. No automatic retry.`,
       z.object({ path: z.string(), oldText: z.string().max(MAX_TEXT_REPLACEMENT_INPUT_BYTES),
-        newText: z.string().max(MAX_TEXT_REPLACEMENT_INPUT_BYTES), ifMatch: version }).strict(),
+        newText: z.string().max(MAX_TEXT_REPLACEMENT_INPUT_BYTES), ...mutationPreconditions }).strict()
+        .refine(hasMutationPrecondition, { message: "Requires ifMatch or ifMatchGuard" }),
       mutationOutput.extend({ replacementCount: z.literal(1) }).strict(),
-      ({ path, oldText, newText, ifMatch }) => mutations.replaceText(path, oldText, newText, { ifMatch }),
+      ({ path, oldText, newText, ...preconditions }) => mutations.replaceText(path, oldText, newText, defined(preconditions)),
       (error, args) => mapVaultMutationToolError(error, args.path), { destructive: true, idempotent: false });
     const headingAddress = z.array(z.string()).nullable();
-    register(VAULT_PATCH_TOOL_NAME, "Patch a heading/block/property with exact-byte ifMatch from a read/map. Copy map keys unchanged. Heading content without within: # is one level below the target for content (default), or the target's actual parent for markerAndContent prepend/append. No automatic retry.",
+    register(VAULT_PATCH_TOOL_NAME, "Patch a heading/block/property with ifMatch or ifMatchGuard (copy versionGuard) from a read/map. Copy map keys unchanged. Heading content without within: # is one level below the target for content (default), or the target's actual parent for markerAndContent prepend/append. No automatic retry.",
       z.object({ path: z.string(), targetType: z.enum(["heading", "block", "frontmatter"]),
         target: z.union([headingAddress, z.string()]), within: z.number().int().optional(),
         operation: z.enum(["replace", "prepend", "append", "delete"]),
@@ -228,19 +233,19 @@ export function createVaultMcpServer(dependencies: VaultMcpServerDependencies, o
         destination: z.object({ parent: headingAddress, place: z.union([z.enum(["first", "last"]),
           z.object({ before: headingAddress }).strict(), z.object({ after: headingAddress }).strict()]) }).strict().optional()
           .describe("Heading move only: operation=replace, scope=parent; omit content."),
-        ifMatch: version, createTargetIfMissing: z.boolean().optional(), rejectIfContentPreexists: z.boolean().optional(),
+        ...mutationPreconditions, createTargetIfMissing: z.boolean().optional(), rejectIfContentPreexists: z.boolean().optional(),
         allowSubtreeReplacement: z.boolean().optional()
-          .describe("Explicitly allow heading content/whole-section replace to remove child sections; ifMatch still applies."),
-      }).strict(), mutationOutput,
+          .describe("Explicitly allow heading content/whole-section replace to remove child sections; the version precondition still applies."),
+      }).strict().refine(hasMutationPrecondition, { message: "Requires ifMatch or ifMatchGuard" }), mutationOutput,
       ({ path, ...instruction }) => mutations.patch(path, defined(instruction)),
       (error, args) => mapVaultMutationToolError(error, args.path), { destructive: true, idempotent: false });
-    register(VAULT_MOVE_TOOL_NAME, "Move a file; no link/history updates. Creates parents; trailing / retains filename. Overwrite requires allowOverwrite. ifMatch checks source only. No retry or cross-filesystem fallback.",
-      z.object({ path: z.string(), destination: z.string(), allowOverwrite: z.boolean().optional(), ifMatch: version.optional() }).strict(),
+    register(VAULT_MOVE_TOOL_NAME, "Move a file; no link/history updates. Creates parents; trailing / retains filename. Overwrite requires allowOverwrite. ifMatch or ifMatchGuard (copy versionGuard) checks source only. No retry or cross-filesystem fallback.",
+      z.object({ path: z.string(), destination: z.string(), allowOverwrite: z.boolean().optional(), ...mutationPreconditions }).strict(),
       z.object({ message: z.literal("OK"), oldPath: z.string(), newPath: z.string() }).strict(),
       ({ path, destination, ...options }) => mutations.move(path, destination, defined(options)),
       (error, args) => mapVaultMutationToolError(error, args.path), { destructive: true, idempotent: false });
-    register(VAULT_DELETE_TOOL_NAME, "Delete a file to recoverable Vault .trash; permanent=true is irreversible. ifMatch checks source. No automatic retry or permanent fallback.",
-      z.object({ path: z.string(), permanent: z.boolean().optional(), ifMatch: version.optional() }).strict(),
+    register(VAULT_DELETE_TOOL_NAME, "Delete a file to recoverable Vault .trash; permanent=true is irreversible. ifMatch or ifMatchGuard (copy versionGuard) checks source. No automatic retry or permanent fallback.",
+      z.object({ path: z.string(), permanent: z.boolean().optional(), ...mutationPreconditions }).strict(),
       z.discriminatedUnion("permanent", [
         z.object({ message: z.literal("OK"), path: z.string(), permanent: z.literal(false), trashPath: z.string() }).strict(),
         z.object({ message: z.literal("OK"), path: z.string(), permanent: z.literal(true) }).strict(),

@@ -8,12 +8,18 @@ const scope = z.object({ directory: z.string(), recursive: z.boolean() }).strict
 const target = z.object({ path: z.string(), heading: z.array(z.string().min(1).max(1024)).min(1).max(32).optional(),
   block: z.string().regex(/^[a-zA-Z0-9-]+$/u).optional() }).strict();
 const limits = Object.fromEntries(Object.entries(REFERENCE_LIMITS).map(([key, bound]) => [key, z.number().int().min(1).max(bound.max).optional()]));
-const occurrence = z.object({ source: z.object({ path: z.string(), version: z.string().regex(/^sha256:[0-9a-f]{64}$/u) }).strict(),
+const version = z.string().regex(/^sha256:[0-9a-f]{64}$/u);
+const versionGuard = z.string().length(16).regex(/^[0-9a-f]{16}$/u);
+const occurrence = z.object({ source: z.object({ path: z.string(), version, versionGuard }).strict(),
   start: z.number().int().nonnegative(), end: z.number().int().nonnegative(), line: z.number().int().positive(), column: z.number().int().positive(),
   raw: z.string(), href: z.string(), syntax: z.enum(["wikilink", "markdown"]), embed: z.boolean(), unsupported: z.string().optional(),
   status: z.enum(["resolved", "ambiguous", "unresolved", "unsupported", "unknown"]), reason: z.string(),
   destination: target.optional(), candidates: z.array(z.string()).optional() }).strict();
-const output = z.object({ target: target.extend({ fileExists: z.boolean(), status: z.enum(["resolved", "ambiguous", "unresolved", "unsupported", "unknown"]), reason: z.string(), version: z.string().optional() }).strict(), scope, resolutionScope: scope,
+const targetStatus = { fileExists: z.boolean(), status: z.enum(["resolved", "ambiguous", "unresolved", "unsupported", "unknown"]), reason: z.string() };
+const output = z.object({ target: z.union([
+  target.extend({ ...targetStatus, version, versionGuard }).strict(),
+  target.extend(targetStatus).strict(),
+]), scope, resolutionScope: scope,
   coverage: z.object({ complete: z.literal(true), incomingOutsideScope: z.literal("unknown"), atomicSnapshot: z.literal(false),
     offsetUnit: z.literal("utf16"), positionBase: z.literal(1), sourcesScanned: z.number().int().nonnegative(),
     entriesVisited: z.number().int().nonnegative(), bytesRead: z.number().int().nonnegative(), excluded: z.array(z.string()) }).strict(),

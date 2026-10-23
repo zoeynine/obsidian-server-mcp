@@ -3,13 +3,15 @@ import type { VaultDocumentReader } from "./get-vault-document-map.js";
 import type { ReadVaultDocumentOptions } from "../file/read-vault-document.js";
 import { requireJson, toNoteJson, VaultSemanticError, withoutBom, type JsonValue, type NoteJson } from "./note-json.js";
 import { validateMarkdownSource } from "../parser/structured-markdown.js";
+import type { VersionGuard } from "../version/content-version.js";
 
 export interface ReadVaultNoteOptions extends ReadVaultDocumentOptions {
   readonly targetType?: "heading" | "block" | "frontmatter";
   readonly target?: readonly string[] | string;
   readonly scope?: ReadScope;
 }
-export type VaultNoteReadResult = (NoteJson & { readonly version: string }) | { readonly path: string; readonly version: string; readonly result: JsonValue };
+export type VaultNoteReadResult = (NoteJson & { readonly version: string; readonly versionGuard: VersionGuard }) |
+  { readonly path: string; readonly version: string; readonly versionGuard: VersionGuard; readonly result: JsonValue };
 
 /** One safe read supplies both the exact-byte token and selected value. */
 export async function readVaultNote(reader: VaultDocumentReader, path: string, options: ReadVaultNoteOptions = {}): Promise<VaultNoteReadResult> {
@@ -33,9 +35,10 @@ export async function readVaultNote(reader: VaultDocumentReader, path: string, o
     if (scope !== undefined && address) address.scope = scope;
   }
   const document = await reader(path, maxBytes === undefined ? {} : { maxBytes });
-  if (!address) return { ...toNoteJson(document), version: document.version };
+  if (!address) return { ...toNoteJson(document), version: document.version, versionGuard: document.versionGuard };
   const source = withoutBom(document.content);
   validateMarkdownSource(source);
   const result = readTarget(source, address);
-  return { path: document.path, version: document.version, result: requireJson(result.kind === "frontmatter" ? result.value : result.content) };
+  return { path: document.path, version: document.version, versionGuard: document.versionGuard,
+    result: requireJson(result.kind === "frontmatter" ? result.value : result.content) };
 }

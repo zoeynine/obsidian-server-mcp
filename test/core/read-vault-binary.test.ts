@@ -9,6 +9,7 @@ import {
   VaultDocumentTooLargeError, VaultDocumentNotFoundError, VaultDocumentNotRegularFileError,
 } from "../../src/core/index.js";
 import { binaryFixture, pdfFixture } from "../helpers/binary-fixture.js";
+import { getVersionGuard } from "../../src/core/version/content-version.js";
 
 test("explicit bytes preserve arbitrary bytes, exact versions and unknown MIME fallback", async t => {
   const { vault, sandbox } = await binaryFixture(t);
@@ -19,6 +20,7 @@ test("explicit bytes preserve arbitrary bytes, exact versions and unknown MIME f
   assert.deepEqual(result.data, data);
   assert.equal(result.mimeType, "application/octet-stream");
   assert.equal(result.version, computeContentVersion(data));
+  assert.equal(result.versionGuard, getVersionGuard(computeContentVersion(data)));
   await assert.rejects(readVaultDocument(sandbox, "原件.blob"));
   assert.deepEqual(await readFile(path.join(vault, "原件.blob")), data);
 });
@@ -75,6 +77,7 @@ test("image auto produces a bounded preview while bytes and source versions rema
   assert.equal(decoded.width, result.width);
   assert.equal(decoded.hasAlpha, true);
   assert.equal(result.version, computeContentVersion(data));
+  assert.equal(result.versionGuard, getVersionGuard(computeContentVersion(data)));
   const original = await readVaultBinary(sandbox, "large.png", { as: "bytes" });
   assert.ok(original.kind === "bytes");
   assert.deepEqual(original.data, data);
@@ -116,6 +119,7 @@ test("images above the pixel guard fall back without returning oversized image c
   assert.ok(result.kind === "link");
   assert.equal(result.reason, "image_preview_unavailable");
   assert.equal(result.version, computeContentVersion(data));
+  assert.equal(result.versionGuard, getVersionGuard(computeContentVersion(data)));
 });
 
 test("the explicit byte bound is inclusive; raw bytes never silently select a link", async t => {
@@ -136,6 +140,7 @@ test("large file links inspect a readable file without buffering it or inventing
     assert.equal(result.sizeBytes, 128 * 1024 * 1024);
     assert.equal(result.reason, as === "auto" ? "download" : "requested");
     assert.equal(result.version, undefined);
+    assert.equal("versionGuard" in result, false);
     assert.equal("data" in result, false);
   }
 });
@@ -148,6 +153,7 @@ test("unrenderable and disguised images select an explicit fallback without deco
     assert.ok(result.kind === "link");
     assert.equal(result.reason, "image_preview_unavailable");
     assert.equal(result.version, computeContentVersion(data));
+    assert.equal(result.versionGuard, getVersionGuard(computeContentVersion(data)));
   }
 });
 

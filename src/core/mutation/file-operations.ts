@@ -4,16 +4,17 @@ import { lstat, mkdir, open, rmdir } from "node:fs/promises";
 import * as path from "node:path";
 import type { VaultPathSandbox, VaultRelativePath } from "../path/vault-path.js";
 import { MAX_VAULT_DOCUMENT_BYTES } from "../file/read-vault-document.js";
-import { assertVersionMatch, parseContentVersion, type ContentVersion } from "../version/content-version.js";
+import { assertVersionPrecondition, parseVersionPrecondition, type ContentVersion,
+  type VersionPrecondition, type VersionPreconditionInput } from "../version/content-version.js";
 import { withPathLock, withPathLocks } from "./path-lock.js";
 import { checkDirectories, ensureParentDirectories, hasCode, parentPath, sameIdentity, sameSnapshot } from "./filesystem-checks.js";
 import { changed, VaultMutationError } from "./mutation-errors.js";
 import { nativeMutationIO, type MutationIO } from "./mutation-io.js";
 
-export interface VaultDeleteOptions { readonly permanent?: boolean; readonly ifMatch?: string }
+export interface VaultDeleteOptions extends VersionPreconditionInput { readonly permanent?: boolean }
 export type VaultDeleteResult = { readonly message: "OK"; readonly path: VaultRelativePath } & (
   { readonly permanent: true } | { readonly permanent: false; readonly trashPath: string });
-export interface VaultMoveOptions { readonly allowOverwrite?: boolean; readonly ifMatch?: string }
+export interface VaultMoveOptions extends VersionPreconditionInput { readonly allowOverwrite?: boolean }
 export interface VaultMoveResult { readonly message: "OK"; readonly oldPath: VaultRelativePath; readonly newPath: VaultRelativePath }
 
 /** Filesystem move with Local REST destination/overwrite semantics. The headless
@@ -23,24 +24,26 @@ export async function moveVaultFile(sandbox: VaultPathSandbox, inputPath: string
   options: VaultMoveOptions = {}, io: MutationIO = nativeMutationIO): Promise<VaultMoveResult> {
   const source = sandbox.parse(inputPath);
   const target = sandbox.parseMoveDestination(source, destination);
-  const ifMatch = options.ifMatch;
+  const precondition = parseVersionPrecondition(options);
   const allowOverwrite = options.allowOverwrite ?? false;
-  if (ifMatch !== undefined) parseContentVersion(ifMatch);
   return withPathLocks(sandbox.root, [source, target], async () => {
     // Upstream treats an identical path as a no-op, even if it is missing.
     // A supplied version still requires an existing matching regular file.
     if (source === target) {
       await sandbox.resolve(source, { rejectNameAliases: true });
-      if (ifMatch !== undefined) await snapshot(sandbox, source, ifMatch);
+      if (precondition) await snapshot(sandbox, source, precondition);
       return { message: "OK", oldPath: source, newPath: target };
     }
-    const initial = await snapshot(sandbox, source, ifMatch);
+    const initial = await snapshot(sandbox, source, precondition);
+    // Guard admission pins the full hash for every subsequent byte recheck.
+    const pinned: VersionPrecondition | undefined = initial.version === undefined
+      ? undefined : { kind: "version", value: initial.version };
     const previousTarget = await optionalSnapshot(sandbox, target);
     if (previousTarget && !allowOverwrite) throw new VaultMutationError("destination_exists", "Destination already exists", { path: source, destination: target });
     const sourceParent = await sandbox.resolve(parentPath(source), { allowRoot: true, mustExist: true });
     const sourceParentStats = await lstat(sourceParent.absolutePath, { bigint: true });
     const targetParents = await ensureParentDirectories(sandbox, target);
-    const finalSource = await snapshot(sandbox, source, ifMatch);
+    const finalSource = await snapshot(sandbox, source, pinned);
     if (!sameSnapshot(initial.stats, finalSource.stats)) throw changed(source);
     const currentTarget = await optionalSnapshot(sandbox, target);
     if (previousTarget ? !currentTarget || !sameSnapshot(previousTarget.stats, currentTarget.stats) : currentTarget !== undefined) throw changed(target);
@@ -57,7 +60,7 @@ export async function moveVaultFile(sandbox: VaultPathSandbox, inputPath: string
         // destination; unlink the source only after revalidating both names.
         await io.link(finalSource.absolutePath, resolvedTarget.absolutePath);
         try {
-          const linked = await snapshot(sandbox, source, ifMatch, 2n);
+          const linked = await snapshot(sandbox, source, pinned, 2n);
           if (!sameIdentity(initial.stats, linked.stats) || initial.stats.size !== linked.stats.size ||
               initial.stats.mtimeNs !== linked.stats.mtimeNs || initial.stats.mode !== linked.stats.mode ||
               initial.stats.uid !== linked.stats.uid || initial.stats.gid !== linked.stats.gid) throw changed(source);
@@ -95,17 +98,18 @@ export async function moveVaultFile(sandbox: VaultPathSandbox, inputPath: string
 
 /** Local REST naming/flags, with server-local recoverable trash by default.
  * Works on regular files including attachments: no text decoding or transfer.
- * ifMatch is an optional exact-byte extension; omission retains Local REST's
+ * ifMatch/ifMatchGuard are optional byte preconditions; omission retains Local REST's
  * delete-current-path behavior. No automatic retry or link/backlink rewriting.
  */
 export async function deleteVaultFile(sandbox: VaultPathSandbox, inputPath: string,
   options: VaultDeleteOptions = {}, io: MutationIO = nativeMutationIO): Promise<VaultDeleteResult> {
   const relative = sandbox.parse(inputPath);
   const permanent = options.permanent ?? false;
-  const ifMatch = options.ifMatch;
-  if (ifMatch !== undefined) parseContentVersion(ifMatch);
+  const precondition = parseVersionPrecondition(options);
   return withPathLock(sandbox.root, relative, async () => {
-    const initial = await snapshot(sandbox, relative, ifMatch);
+    const initial = await snapshot(sandbox, relative, precondition);
+    const pinned: VersionPrecondition | undefined = initial.version === undefined
+      ? undefined : { kind: "version", value: initial.version };
     const parentRelative = parentPath(relative);
     const parent = await sandbox.resolve(parentRelative, { allowRoot: true });
     const parentStats = await lstat(parent.absolutePath, { bigint: true });
@@ -142,7 +146,7 @@ export async function deleteVaultFile(sandbox: VaultPathSandbox, inputPath: stri
         await sandbox.resolveInternalTrash(bucket.relative, { mustExist: true });
         if (!sameIdentity(bucket.stats, await lstat(bucket.absolute, { bigint: true }))) throw changed(relative);
       }
-      const current = await snapshot(sandbox, relative, ifMatch);
+      const current = await snapshot(sandbox, relative, pinned);
       if (!sameSnapshot(initial.stats, current.stats)) throw changed(relative);
       if (permanent) await io.unlink(current.absolutePath);
       else {
@@ -174,7 +178,7 @@ async function optionalSnapshot(sandbox: VaultPathSandbox, relative: VaultRelati
   catch (error) { if (error instanceof VaultMutationError && error.code === "not_found") return undefined; throw error; }
 }
 
-async function snapshot(sandbox: VaultPathSandbox, relative: VaultRelativePath, ifMatch: string | undefined, links = 1n) {
+async function snapshot(sandbox: VaultPathSandbox, relative: VaultRelativePath, precondition: VersionPrecondition | undefined, links = 1n) {
   const resolved = await sandbox.resolve(relative, { rejectNameAliases: true });
   let stats: BigIntStats;
   try { stats = await lstat(resolved.absolutePath, { bigint: true }); }
@@ -183,7 +187,8 @@ async function snapshot(sandbox: VaultPathSandbox, relative: VaultRelativePath, 
     throw error;
   }
   if (!stats.isFile() || stats.nlink !== links) throw new VaultMutationError("unsafe_target", "Operation requires a regular file without additional hard links; folders are not supported", { path: relative });
-  if (ifMatch !== undefined) {
+  let version: ContentVersion | undefined;
+  if (precondition) {
     if (stats.size > BigInt(MAX_VAULT_DOCUMENT_BYTES)) throw new VaultMutationError("too_large", "Version-checked file operations are limited to 64 MiB", { path: relative });
     const handle = await open(resolved.absolutePath, constants.O_RDONLY |
       (process.platform === "win32" ? 0 : constants.O_NOFOLLOW | constants.O_NONBLOCK));
@@ -200,10 +205,11 @@ async function snapshot(sandbox: VaultPathSandbox, relative: VaultRelativePath, 
         hash.update(chunk.subarray(0, bytesRead));
       }
       if (!sameSnapshot(stats, await handle.stat({ bigint: true }))) throw changed(relative);
-      assertVersionMatch(`sha256:${hash.digest("hex")}` as ContentVersion, ifMatch);
+      version = `sha256:${hash.digest("hex")}` as ContentVersion;
+      assertVersionPrecondition(version, precondition);
     } finally { await handle.close(); }
   }
   await sandbox.resolve(relative, { mustExist: true, rejectNameAliases: true });
   if (!sameSnapshot(stats, await lstat(resolved.absolutePath, { bigint: true }))) throw changed(relative);
-  return { absolutePath: resolved.absolutePath, stats };
+  return { absolutePath: resolved.absolutePath, stats, version };
 }

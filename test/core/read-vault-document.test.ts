@@ -13,12 +13,13 @@ import {
   VaultDocumentNotRegularFileError,
   VaultDocumentTooLargeError,
   readVaultDocument,
+  readVaultFileBytes,
 } from "../../src/core/file/read-vault-document.js";
 import {
   VaultPathError,
   VaultPathSandbox,
 } from "../../src/core/path/vault-path.js";
-import { computeContentVersion } from "../../src/core/version/content-version.js";
+import { computeContentVersion, getVersionGuard } from "../../src/core/version/content-version.js";
 
 test("reads a regular UTF-8 document without changing its text", async (t) => {
   const fixture = await createFixture(t);
@@ -31,7 +32,11 @@ test("reads a regular UTF-8 document without changing its text", async (t) => {
   assert.equal(result.content, "# Project\r\n\r\n中文内容\n");
   assert.equal(result.sizeBytes, bytes.byteLength);
   assert.equal(result.version, computeContentVersion(bytes));
+  assert.equal(result.versionGuard, getVersionGuard(computeContentVersion(bytes)));
   assert.equal(Number.isFinite(result.modifiedAtMs), true);
+  const raw = await readVaultFileBytes(fixture.sandbox, "note.md");
+  assert.deepEqual(raw.bytes, bytes);
+  assert.equal(raw.versionGuard, result.versionGuard);
 });
 
 test("versions exact bytes while applying the explicit UTF-8 BOM text policy", async (t) => {
@@ -47,7 +52,9 @@ test("versions exact bytes while applying the explicit UTF-8 BOM text policy", a
   assert.equal(plain.content, "same text");
   assert.equal(withBom.content, "\uFEFFsame text");
   assert.equal(withBom.version, computeContentVersion(bomBytes));
+  assert.equal(withBom.versionGuard, getVersionGuard(computeContentVersion(bomBytes)));
   assert.notEqual(withBom.version, plain.version);
+  assert.notEqual(withBom.versionGuard, plain.versionGuard);
 });
 
 test("rejects invalid UTF-8 instead of replacing malformed bytes", async (t) => {

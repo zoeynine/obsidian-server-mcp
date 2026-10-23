@@ -9,6 +9,7 @@ import { readVaultNote } from "../../src/core/document/read-vault-note.js";
 import { parseFrontmatter, requireJson, VaultSemanticError, withoutBom } from "../../src/core/document/note-json.js";
 import { prepareVaultPatch } from "../../src/core/patch/prepare-vault-patch.js";
 import { validateQuery } from "../../src/core/search/json-logic-query.js";
+import { getVersionGuard } from "../../src/core/version/content-version.js";
 
 async function fixture(t: TestContext, protectedPaths: string[] = []) {
   const root = await mkdtemp(path.join(tmpdir(), "obsidian-parity-"));
@@ -46,11 +47,13 @@ test("read and map use pinned duplicate heading/block addresses and all three sc
     assert.ok("result" in result);
     assert.deepEqual(result.result, expected);
     assert.equal(result.version, computeContentVersion(source));
+    assert.equal(result.versionGuard, getVersionGuard(computeContentVersion(source)));
     assert.equal("content" in result, false);
   }
   const note = await readVaultNote(f.reader, "note.md");
   assert.ok("content" in note);
   assert.equal(note.content, source);
+  assert.equal(note.versionGuard, map.versionGuard);
   assert.deepEqual(note.frontmatter, {status: "done", tags: ["one", "two"]});
   assert.equal(note.stat.size, Buffer.byteLength(source));
   assert.equal("backlinks" in note, false);
@@ -102,7 +105,9 @@ test("generic frontmatter patch follows the operation/scope table and preserves 
   ]) assert.throws(() => prepareVaultPatch(document, {...instruction, ifMatch: document.version}));
   const repeat = prepareVaultPatch(document, {targetType: "frontmatter", target: "word", operation: "append", value: "abc", rejectIfContentPreexists: true, ifMatch: document.version});
   assert.equal(parseFrontmatter(withoutBom(repeat.document)).value["word"], "abcabc");
-  const noProperties = {...document, content: "\uFEFF# Body\r\n", version: computeContentVersion("\uFEFF# Body\r\n")};
+  const noPropertiesVersion = computeContentVersion("\uFEFF# Body\r\n");
+  const noProperties = {...document, content: "\uFEFF# Body\r\n", version: noPropertiesVersion,
+    versionGuard: getVersionGuard(noPropertiesVersion)};
   const added = prepareVaultPatch(noProperties, {targetType: "frontmatter", target: "status", operation: "replace", value: "new", createTargetIfMissing: true, ifMatch: noProperties.version});
   assert.deepEqual(parseFrontmatter(withoutBom(added.document)).value, {status: "new"});
   assert.ok(added.document.endsWith("# Body\r\n"));

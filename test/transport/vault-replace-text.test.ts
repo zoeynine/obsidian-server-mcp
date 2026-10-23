@@ -6,7 +6,7 @@ import test, { type TestContext } from "node:test";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { readToolError as error } from "./tool-error.js";
-import { computeContentVersion } from "../../src/core/version/content-version.js";
+import { computeContentVersion, getVersionGuard } from "../../src/core/version/content-version.js";
 import { MAX_TEXT_REPLACEMENT_INPUT_BYTES } from "../../src/core/mutation/prepare-text-replacement.js";
 
 async function fixture(t: TestContext) {
@@ -26,22 +26,22 @@ interface ObjectOutputSchema {
   readonly properties?: Readonly<Record<string, { readonly const?: unknown }>>;
 }
 
-test("stdio replace-text advertises exactly four strict inputs and its compact strict receipt", async t => {
+test("stdio replace-text advertises strict text inputs and two optional version preconditions", async t => {
   const { client } = await fixture(t);
   const tools = (await client.listTools()).tools;
   const tool = tools.find(item => item.name === "vault_replace_text")!;
   assert.ok(tool);
-  assert.deepEqual(Object.keys(tool.inputSchema.properties ?? {}).sort(), ["ifMatch", "newText", "oldText", "path"]);
-  assert.deepEqual([...tool.inputSchema.required ?? []].sort(), ["ifMatch", "newText", "oldText", "path"]);
+  assert.deepEqual(Object.keys(tool.inputSchema.properties ?? {}).sort(), ["ifMatch", "ifMatchGuard", "newText", "oldText", "path"]);
+  assert.deepEqual([...tool.inputSchema.required ?? []].sort(), ["newText", "oldText", "path"]);
   assert.equal(tool.inputSchema["additionalProperties"], false);
   assert.deepEqual(tool.annotations, { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false });
   assert.match(tool.description ?? "", /unique.*case-sensitive.*literal/u);
   assert.match(tool.description ?? "", /whole-file vault_read/u);
   const output = tool.outputSchema as ObjectOutputSchema;
   assert.equal(output["additionalProperties"], false);
-  assert.deepEqual([...(output["required"] ?? [])].sort(), ["beforeSizeBytes", "created", "message", "path", "replacementCount", "sizeBytes", "version"]);
+  assert.deepEqual([...(output["required"] ?? [])].sort(), ["beforeSizeBytes", "created", "message", "path", "replacementCount", "sizeBytes", "version", "versionGuard"]);
   assert.deepEqual(Object.keys(output["properties"] ?? {}).sort(),
-    ["beforeSizeBytes", "created", "message", "path", "replacementCount", "sizeBytes", "version", "warnings"]);
+    ["beforeSizeBytes", "created", "message", "path", "replacementCount", "sizeBytes", "version", "versionGuard", "warnings"]);
   assert.equal(output["properties"]?.["replacementCount"]?.const, 1);
   for (const name of ["vault_write", "vault_append", "vault_patch"]) {
     const schema = tools.find(item => item.name === name)!.outputSchema as ObjectOutputSchema;
@@ -70,7 +70,7 @@ test("stdio whole-file read supplies the literal text and exact version for one 
   } });
   assert.notEqual(replaced.isError, true, JSON.stringify(replaced));
   assert.deepEqual(replaced.content, []);
-  assert.deepEqual(replaced.structuredContent, { message: "OK", path: "note.md", version: computeContentVersion(expected),
+  assert.deepEqual(replaced.structuredContent, { message: "OK", path: "note.md", version: computeContentVersion(expected), versionGuard: getVersionGuard(computeContentVersion(expected)),
     beforeSizeBytes: Buffer.byteLength(source), sizeBytes: Buffer.byteLength(expected), created: false, replacementCount: 1 });
   assert.deepEqual(await readFile(file), Buffer.from(expected));
   const stale = await client.callTool({ name: "vault_replace_text", arguments: {
@@ -83,7 +83,7 @@ test("stdio whole-file read supplies the literal text and exact version for one 
   } });
   assert.notEqual(removed.isError, true, JSON.stringify(removed));
   const afterDeletion = expected.slice(0, start) + expected.slice(start + newText.length);
-  assert.deepEqual(removed.structuredContent, { message: "OK", path: "note.md", version: computeContentVersion(afterDeletion),
+  assert.deepEqual(removed.structuredContent, { message: "OK", path: "note.md", version: computeContentVersion(afterDeletion), versionGuard: getVersionGuard(computeContentVersion(afterDeletion)),
     beforeSizeBytes: Buffer.byteLength(expected), sizeBytes: Buffer.byteLength(afterDeletion), created: false, replacementCount: 1 });
   assert.deepEqual(await readFile(file), Buffer.from(afterDeletion));
 });

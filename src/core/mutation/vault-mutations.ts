@@ -9,7 +9,8 @@ import { readVaultDocument, VaultDocumentNotFoundError, DEFAULT_MAX_VAULT_DOCUME
 import { assertTextContent, assertTextPath } from "../file/text-policy.js";
 import { VaultPathSandbox, type VaultRelativePath } from "../path/vault-path.js";
 import { MAX_PATCH_INPUT_BYTES, prepareVaultPatch } from "../patch/prepare-vault-patch.js";
-import { assertVersionMatch, computeContentVersion, parseContentVersion, type ContentVersion } from "../version/content-version.js";
+import { assertVersionMatch, assertVersionPrecondition, computeContentVersion, getVersionGuard, parseVersionPrecondition,
+  type ContentVersion, type VersionGuard, type VersionPrecondition, type VersionPreconditionInput } from "../version/content-version.js";
 import { nativeMutationIO, type MutationIO } from "./mutation-io.js";
 import { withPathLock } from "./path-lock.js";
 import { checkDirectories, ensureParentDirectories, hasCode, sameIdentity, sameSnapshot } from "./filesystem-checks.js";
@@ -28,6 +29,7 @@ export interface VaultMutationResult {
   readonly message: "OK";
   readonly path: VaultRelativePath;
   readonly version: ContentVersion;
+  readonly versionGuard: VersionGuard;
   readonly beforeSizeBytes: number;
   readonly sizeBytes: number;
   readonly created: boolean;
@@ -60,9 +62,9 @@ export class VaultMutationStore {
     return new VaultMutationStore(sandbox, options);
   }
 
-  async write(inputPath: string, content: string, options: { readonly ifMatch?: string } = {}): Promise<VaultMutationResult> {
+  async write(inputPath: string, content: string, options: VersionPreconditionInput = {}): Promise<VaultMutationResult> {
     this.#validateText(inputPath, content);
-    return this.#mutate(inputPath, options.ifMatch, false, () => ({ content, warnings: [] }));
+    return this.#mutate(inputPath, parseVersionPrecondition(options), false, () => ({ content, warnings: [] }));
   }
   async move(inputPath: string, destination: string, options: VaultMoveOptions = {}): Promise<VaultMoveResult> {
     return moveVaultFile(this.#sandbox, inputPath, destination, options, this.#io);
@@ -70,9 +72,9 @@ export class VaultMutationStore {
   async delete(inputPath: string, options: VaultDeleteOptions = {}): Promise<VaultDeleteResult> {
     return deleteVaultFile(this.#sandbox, inputPath, options, this.#io);
   }
-  async append(inputPath: string, content: string, options: { readonly ifMatch?: string } = {}): Promise<VaultMutationResult> {
+  async append(inputPath: string, content: string, options: VersionPreconditionInput = {}): Promise<VaultMutationResult> {
     this.#validateText(inputPath, content);
-    return this.#mutate(inputPath, options.ifMatch, false, previous => ({
+    return this.#mutate(inputPath, parseVersionPrecondition(options), false, previous => ({
       // Local REST 5.3.1 adds LF even when an existing file is empty.
       content: previous ? previous.content + (previous.content.endsWith("\n") ? "" : "\n") + content : content,
       warnings: [],
@@ -86,25 +88,27 @@ export class VaultMutationStore {
       throw new VaultMutationError("too_large", "Patch input exceeds 4 MiB", { path: inputPath });
     }
     const captured: unknown = JSON.parse(serialized);
-    if (!captured || typeof captured !== "object" || !("ifMatch" in captured) || typeof captured.ifMatch !== "string") {
-      throw new VaultMutationError("if_match_required", "vault_patch requires ifMatch", { path: inputPath });
+    const precondition = captured && typeof captured === "object"
+      ? parseVersionPrecondition(captured as VersionPreconditionInput) : undefined;
+    if (!precondition) {
+      throw new VaultMutationError("if_match_required", "vault_patch requires ifMatch or ifMatchGuard", { path: inputPath });
     }
-    return this.#mutate(inputPath, captured.ifMatch, true, previous => {
+    return this.#mutate(inputPath, precondition, true, previous => {
       const prepared = prepareVaultPatch(previous!, captured);
       return { content: prepared.document, warnings: prepared.warnings };
     });
   }
   async replaceText(inputPath: string, oldText: string, newText: string,
-    options: { readonly ifMatch: string }): Promise<VaultTextReplacementResult> {
+    options: VersionPreconditionInput): Promise<VaultTextReplacementResult> {
     this.#sandbox.parse(inputPath);
     assertTextPath(inputPath);
     // Strings and the version are captured before waiting on the path lock.
-    const ifMatch = options?.ifMatch;
-    if (typeof ifMatch !== "string") {
-      throw new VaultMutationError("if_match_required", "vault_replace_text requires ifMatch", { path: inputPath });
+    const precondition = parseVersionPrecondition(options ?? {});
+    if (!precondition) {
+      throw new VaultMutationError("if_match_required", "vault_replace_text requires ifMatch or ifMatchGuard", { path: inputPath });
     }
     assertTextReplacementInput(inputPath, oldText, newText);
-    const result = await this.#mutate(inputPath, ifMatch, true, previous => ({
+    const result = await this.#mutate(inputPath, precondition, true, previous => ({
       content: prepareTextReplacement(inputPath, previous!.content, oldText, newText),
       warnings: [],
     }));
@@ -132,19 +136,18 @@ export class VaultMutationStore {
     return { document, stats: after };
   }
 
-  async #mutate(inputPath: string, ifMatch: string | undefined, mustExist: boolean,
+  async #mutate(inputPath: string, precondition: VersionPrecondition | undefined, mustExist: boolean,
     prepare: (previous: VaultDocumentReadResult | undefined) => { content: string; warnings: readonly Warning[] }): Promise<VaultMutationResult> {
     const relative = this.#sandbox.parse(inputPath);
     assertTextPath(inputPath);
-    if (ifMatch !== undefined) parseContentVersion(ifMatch);
     return withPathLock(this.#sandbox.root, relative, async () => {
       const previous = await this.#snapshot(relative);
       if (previous) {
-        if (ifMatch === undefined) throw new VaultMutationError("if_match_required", "Existing-file mutations require ifMatch", { path: relative });
-        assertVersionMatch(previous.document.version, ifMatch);
+        if (!precondition) throw new VaultMutationError("if_match_required", "Existing-file mutations require ifMatch or ifMatchGuard", { path: relative });
+        assertVersionPrecondition(previous.document.version, precondition);
       } else {
         if (mustExist) throw new VaultDocumentNotFoundError(relative);
-        if (ifMatch !== undefined) throw new VaultMutationError("version_conflict", "The versioned mutation target no longer exists", { path: relative });
+        if (precondition) throw new VaultMutationError("version_conflict", "The versioned mutation target no longer exists", { path: relative });
       }
       const prepared = prepare(previous?.document);
       this.#validateText(relative, prepared.content);
@@ -190,7 +193,8 @@ export class VaultMutationStore {
         const current = await this.#snapshot(relative);
         if (previous) {
           if (!current) throw changed(relative);
-          assertVersionMatch(current.document.version, ifMatch!);
+          // A short initial guard never weakens the full in-flight byte pin.
+          assertVersionMatch(current.document.version, previous.document.version);
           if (!sameSnapshot(previous.stats, current.stats)) throw changed(relative);
           await this.#io.rename(temporary, finalPath.absolutePath);
           temporaryExists = false; // Rename consumed the temporary name.
@@ -221,7 +225,7 @@ export class VaultMutationStore {
       // name cannot be cleaned. Warn instead of inviting a repeated append.
       const warnings = [...prepared.warnings, ...(cleanupFailure ? [{ code: "temporary_cleanup_failed" as const,
         message: "The note was saved, but a protected temporary file remains; filesystem cleanup is needed." }] : [])];
-      return { message: "OK", path: relative, version, beforeSizeBytes, sizeBytes: bytes.length, created: previous === undefined,
+      return { message: "OK", path: relative, version, versionGuard: getVersionGuard(version), beforeSizeBytes, sizeBytes: bytes.length, created: previous === undefined,
         ...(warnings.length ? { warnings } : {}) };
     });
   }

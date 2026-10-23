@@ -3,7 +3,11 @@
 These marked sections are the canonical detailed tool manuals bundled by
 `obsidian_help`. Examples are independent requests, not a sequence to replay.
 Replace `<current version>` with the exact `sha256:` token from the indicated
-current read or document map; the placeholder itself is not a valid token.
+current read or document map. Replace `<current versionGuard>` with the
+server-returned 16-character guard from that same observation; do not truncate
+or regenerate the hash. Neither placeholder is a valid token. Choose full
+`ifMatch` or short `ifMatchGuard`, never both. The `write` guide explains
+64-bit collision limits and conflict recovery.
 All paths are Vault-relative and use `/`. Related help names below are `topic`
 values for `obsidian_help`.
 
@@ -98,9 +102,11 @@ for supported attachments.
 `path` is required. Omit `targetType`, `target` and `scope` for a whole-file
 read. The result contains canonical `path`, unchanged `content`, direct `tags`
 without `#` or added parent tags, parsed `frontmatter`, filesystem `stat`, and
-the exact-byte SHA-256 `version`. `stat.ctime` and `stat.mtime` are milliseconds;
+the exact-byte SHA-256 `version` and its fixed 16-hex `versionGuard`.
+`stat.ctime` and `stat.mtime` are milliseconds;
 `stat.size` is bytes. Creation time can be zero when unavailable. These
-timestamps are informational; use `version` as a mutation's `ifMatch`.
+timestamps are informational; use `version` as `ifMatch` or copy `versionGuard`
+as `ifMatchGuard`, never both. See guide `write` for the short guard's limits.
 
 For a targeted read, supply `targetType` and `target` together. Heading targets
 are arrays containing the full ancestor path from the top level. Copy every key
@@ -116,7 +122,7 @@ and defaults to `content`:
 | Block | Block text | Bare block ID | Text plus its ID span |
 | Frontmatter | Typed JSON value | Property name | One-property JSON object |
 
-Targeted results contain `path`, the full source's `version`, and `result`:
+Targeted results contain `path`, the full source's `version` and `versionGuard`, and `result`:
 Markdown text for heading/block reads, or the selected typed frontmatter value.
 Targeted heading levels are relative; their displayed `#` counts do not prove
 stored hierarchy. For exact literal replacement, copy an unchanged slice from
@@ -169,11 +175,12 @@ Use `vault_read` when the text itself or an exact source slice is needed.
 4 MiB and hard maximum 64 MiB; it does not limit the size of a selected section.
 Optional `maxHeadings` is an integer from 1 through 100,000, default 10,000.
 
-The result contains `path`, exact-byte `version`, a nested `headings` tree,
+The result contains `path`, exact-byte `version`, `versionGuard`, a nested `headings` tree,
 ordered `blocks` IDs and `frontmatterFields`. It includes the parser's duplicate
 heading disambiguators and setext headings. Copy keys unchanged along the full
 ancestor path; do not reconstruct an address from visible heading labels.
-Use this version as `ifMatch` only for an edit based on this observed document.
+For an edit based on this observation, copy `versionGuard` as `ifMatchGuard`
+or the full `version` as `ifMatch`, never both. See guide `write` for collision limits.
 Map addresses are tool addresses, not link-fragment spelling for
 `reference_query`.
 
@@ -251,7 +258,7 @@ Queries also have input/structure and worker limits: 16 KiB serialized query,
 literal string, with bounded evaluation time and concurrency.
 
 The result's `results` contains `filename`, the evaluated source's exact-byte
-`version`, and the query's truthy `result`. The result is not automatically a
+`version`, `versionGuard`, and the query's truthy `result`. The result is not automatically a
 snippet or Boolean. Null, false, zero, empty strings, empty arrays and empty
 objects are omitted. Each version describes its source observation; the scan
 is not an atomic whole-Vault snapshot.
@@ -364,7 +371,9 @@ falling back to `application/octet-stream`. Optional `as` is `auto` (default),
 Metadata identifies `delivery` (`image`, `bytes` or `link`), `path`, source
 `mimeType` and `sizeBytes`. Image metadata also identifies the preview's type,
 size, dimensions and whether it contains only the first frame. Inline image
-and byte results carry the source's exact-byte `version`. A byte resource's
+and byte results carry the source's exact-byte `version` and `versionGuard`.
+The guard can precondition a move/delete; resource and download pins still
+use the full version. A byte resource's
 `obsidian-vault://attachment/…` URI can be read again through MCP resources
 with the same 4 MiB cap and version check; it is not a browser URL.
 
@@ -373,8 +382,9 @@ Links require a deployment-provided download handler that enforces path
 protection, caller identity, current read permissions and the PDF exclusion at
 download time, and delivers original bytes without a login page. Non-preview
 `auto` and explicit `link` inspect without loading/hashing the body and claim
-no content version; they refer to the file at download time. A preview fallback
-that carries a version must deliver those exact bytes or refuse a change.
+no content version or guard; they refer to the file at download time. A preview
+fallback that carries a version also includes its guard, and must deliver
+those exact bytes or refuse a change.
 
 PDF is intentionally rejected in every mode and through resource reads with
 `vault_read_binary.unsupported_pdf`. Use the client's native file upload or
@@ -435,14 +445,15 @@ is inspected/read even outside the source and resolution scopes.
 The result separates confirmed `matches` from `uncertain` occurrences across
 the source scope. Uncertainties can be unrelated to the requested target and
 must not be presented as inferred backlinks. Each occurrence gives source
-path and exact-byte version, `raw`, parsed `href`, syntax, embed flag,
+path, exact-byte version and versionGuard, `raw`, parsed `href`, syntax, embed flag,
 status/reason and known destination or candidates. `start`/`end` are zero-based,
 half-open UTF-16 indices into exact source text; `line` and UTF-16 `column` are
 one-based. These are not byte offsets or rendered-text coordinates.
 
 `target.fileExists` describes the file, while `target.status` describes the
 requested file/anchor. Missing targets can be queried to inspect dangling
-references. Markdown target inspection provides its exact-byte version.
+references. Markdown target inspection provides its exact-byte version and
+versionGuard; uninspected targets have neither.
 `coverage.complete` describes only the bounded supported operation;
 `incomingOutsideScope` stays `unknown` and `atomicSnapshot` stays false.
 
@@ -508,9 +519,9 @@ Save supplied UTF-8 text as a new file or replace an existing file's complete
 content. Use `vault_append` for additions, `vault_replace_text` for one unique
 literal edit, and `vault_patch` for structural editing.
 
-Required arguments are `path` and `content`. For a new file, omit `ifMatch`;
-for an existing file, provide its latest exact-byte `version` from a read or
-map as `ifMatch`. An existing file without that token is refused, and a token
+Required arguments are `path` and `content`. For a new file, omit both tokens;
+for an existing file, copy a current read/map's `versionGuard` as `ifMatchGuard`
+or its full `version` as `ifMatch`, never both. An existing file without a token is refused, and a token
 for a missing file conflicts. There is no force bypass. Missing parent
 directories are created through the shared path checks.
 
@@ -523,7 +534,7 @@ case/Unicode spelling; protected internals, symlinks and extra hard links are
 refused.
 
 Saving uses version checks and atomic publication. The receipt contains
-`message: "OK"`, `path`, new exact-byte `version`, `beforeSizeBytes`,
+`message: "OK"`, `path`, new exact-byte `version`, `versionGuard`, `beforeSizeBytes`,
 `sizeBytes` and `created`, plus optional warnings. Byte counts measure old and
 saved UTF-8 content. Missing and empty originals both have `beforeSizeBytes: 0`;
 `created` distinguishes them. The receipt contains no body or diff and does not
@@ -545,7 +556,7 @@ For a missing `note.md`, create it:
 Independently, replace an existing `note.md` after reading its current version:
 
 ```json
-{"path":"note.md","content":"# Root\n\nReplacement body.\n","ifMatch":"<current version>"}
+{"path":"note.md","content":"# Root\n\nReplacement body.\n","ifMatchGuard":"<current versionGuard>"}
 ```
 
 Related guides: `write`, `paths`. Related tools: `vault_read`,
@@ -560,7 +571,8 @@ Use `vault_patch` to add within a selected section, `vault_replace_text` for
 one unique literal edit, or `vault_write` for complete replacement.
 
 Required `path` and `content` use the same text/path safeguards as writing.
-Existing files require `ifMatch` from a current read or map; omit it for a new
+Existing files require a current read/map's `versionGuard` as `ifMatchGuard`
+or full `version` as `ifMatch`, never both; omit both for a new
 file. No force bypass exists. Protected paths, symlinks, extra hard links,
 binary extensions, NUL and malformed text are refused.
 
@@ -573,7 +585,7 @@ the relative-level semantics of a structural patch.
 
 The store's configured old/result text limit is 4 MiB by default and at most
 64 MiB; there is no request `maxBytes`. The atomic save receipt contains
-`message: "OK"`, `path`, new exact-byte `version`, `beforeSizeBytes`,
+`message: "OK"`, `path`, new exact-byte `version`, `versionGuard`, `beforeSizeBytes`,
 `sizeBytes`, `created` and optional warnings. Sizes are UTF-8 bytes; `created`
 distinguishes a missing original from an empty one. It returns no body or diff.
 
@@ -585,7 +597,7 @@ again. There is no automatic retry, and replaying an append can duplicate text.
 For an existing `note.md`, use its current version:
 
 ```json
-{"path":"note.md","content":"Added paragraph.\n","ifMatch":"<current version>"}
+{"path":"note.md","content":"Added paragraph.\n","ifMatchGuard":"<current versionGuard>"}
 ```
 
 Independently, for a missing file, create it with exactly this content:
@@ -605,10 +617,11 @@ Edit one exact substring in an existing UTF-8 text file. Use this for an inline
 or source-sensitive edit; use `vault_patch` for a known heading/block/property,
 `vault_append` for a file-end addition, or `vault_write` for a complete rewrite.
 
-Exactly four fields are required: `path`, nonempty `oldText`, `newText` and
-`ifMatch`. First read the **whole file** with `vault_read`, copy an unchanged
-slice from its `content`, and use that same response's exact-byte `version` as
-`ifMatch`. Targeted heading reads normalize levels and may not provide an exact
+Required fields are `path`, nonempty `oldText`, `newText` and exactly one of
+`ifMatch` or `ifMatchGuard`. First read the **whole file** with `vault_read`,
+copy an unchanged slice from its `content`, and copy that same response's
+`versionGuard` into `ifMatchGuard` (or full `version` into `ifMatch`).
+Targeted heading reads normalize levels and may not provide an exact
 source slice.
 
 Matching is literal, case-sensitive and over the entire file. `oldText` must
@@ -634,7 +647,7 @@ until the intended location is unique. On a version conflict, reconcile with
 the current whole-file text. Nothing is written for these match failures, and
 no mutation is automatically retried.
 
-Success returns the compact write receipt (`message`, `path`, new `version`,
+Success returns the compact write receipt (`message`, `path`, new `version`, `versionGuard`,
 `beforeSizeBytes`, `sizeBytes`, `created`, optional warnings) plus
 `replacementCount: 1`. Sizes are UTF-8 bytes; `created` is false. A successful
 cleanup warning still means the edit was saved. The receipt does not contain
@@ -648,7 +661,7 @@ that text and the version from the same response:
   "path":"note.md",
   "oldText":"Old body.",
   "newText":"New body. $& is literal.",
-  "ifMatch":"<current version>"
+  "ifMatchGuard":"<current versionGuard>"
 }
 ```
 
@@ -664,8 +677,9 @@ addresses and the current full-file version with `vault_get_document_map`;
 read the relevant text when the edit requires it. Use `vault_replace_text` for
 one unique literal source slice, or `vault_append` for literal file-end text.
 
-Required fields are `path`, `targetType`, `target`, `operation` and exact-byte
-`ifMatch`. `targetType` is `heading`, `block` or `frontmatter`. A heading target
+Required fields are `path`, `targetType`, `target`, `operation` and exactly one
+of full `ifMatch` or short `ifMatchGuard` copied from that read/map.
+`targetType` is `heading`, `block` or `frontmatter`. A heading target
 is its full path-array from the map, including duplicate disambiguators;
 `null` or `[]` selects the document root. A JSON-encoded array string is also
 accepted for clients that stringify it. A block target is a bare ID without
@@ -711,7 +725,7 @@ Pair positional choices with the version observed while selecting the block.
 A heading content/whole-section `replace` without `within` fails with
 `vault_semantic.subtree_confirmation_required` when child headings would be
 removed. Set `allowSubtreeReplacement: true` only when replacing that whole
-subtree is intended, still using a fresh `ifMatch`. To change one direct body
+subtree is intended, still using a fresh `ifMatch` or `ifMatchGuard`. To change one direct body
 block while retaining children, use the appropriate `within` index, such as
 `within: 0`. The confirmation flag is invalid for other edit types.
 
@@ -740,7 +754,7 @@ document root. Place is `first`, `last`, or an object selecting `before` or
 Serialized patch input is capped at 4 MiB; old/result text obeys the store's
 configured text limit (4 MiB default, 64 MiB maximum). The common path/text
 safeguards and atomic save apply. Success is a compact receipt containing
-`message: "OK"`, `path`, new `version`, `beforeSizeBytes`, `sizeBytes`,
+`message: "OK"`, `path`, new `version`, `versionGuard`, `beforeSizeBytes`, `sizeBytes`,
 `created: false` and optional warnings, without the body or diff.
 
 On a missing heading or body block, check the full exact map path and any
@@ -780,7 +794,7 @@ property/frontmatter if missing:
   "operation":"replace",
   "value":"ready",
   "createTargetIfMissing":true,
-  "ifMatch":"<current version>"
+  "ifMatchGuard":"<current versionGuard>"
 }
 ```
 
@@ -816,7 +830,8 @@ or `""` to move the file to the Vault root. Missing destination parents are
 created. Optional `allowOverwrite` defaults to false; an existing destination
 fails unless true. With overwrite enabled, replacement uses atomic rename.
 
-Optional `ifMatch` checks **only the source's** exact bytes and is limited to
+Optional `ifMatch` or `ifMatchGuard` (never both) checks **only the source's**
+full version or short guard, respectively, and is limited to
 64 MiB; it does not version-check overwritten destination content. Without a
 token the tool operates on the current path, without reading/hashing the body
 or imposing that byte cap. Identical normalized source/destination is a no-op,
@@ -839,7 +854,7 @@ No failure triggers automatic retry or link repair.
 For an existing `note.md`, rename/move it using a current source version:
 
 ```json
-{"path":"note.md","destination":"Archive/renamed.md","ifMatch":"<current version>"}
+{"path":"note.md","destination":"Archive/renamed.md","ifMatchGuard":"<current versionGuard>"}
 ```
 
 Independently, move an existing attachment into `Archive/`, keeping its name:
@@ -868,8 +883,8 @@ Keep that receipt for recovery through filesystem access: `.trash` is protected
 from ordinary MCP listing, reading and mutations. Permanent deletion instead
 returns `message`, `path` and `permanent: true`, without a recovery path.
 
-Optional `ifMatch` checks the source's exact bytes with a 64 MiB maximum.
-Omitting it operates on the current path without hashing/reading its body or
+Optional `ifMatch` or `ifMatchGuard` (never both) checks the source's full version
+or short guard with a 64 MiB maximum. Omitting both operates on the current path without hashing/reading its body or
 that size cap. The tool refuses directories, protected paths, traversal,
 symlinks, alternate case/Unicode spellings and files with additional hard links.
 Filesystem permissions remain authoritative.
@@ -883,7 +898,7 @@ operation. No automatic retry or reference repair occurs.
 For an existing `note.md`, trash it using its current version:
 
 ```json
-{"path":"note.md","ifMatch":"<current version>"}
+{"path":"note.md","ifMatchGuard":"<current versionGuard>"}
 ```
 
 Independently, permanently remove an existing `note.md` whose current content

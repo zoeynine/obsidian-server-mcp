@@ -25,6 +25,8 @@ import {
   type SearchVaultQueryOptions,
 } from "../../src/core/index.js";
 import type { VaultMarkdownDocumentReader } from "../../src/core/traversal/scan-vault-markdown.js";
+import { getVersionGuard } from "../../src/core/version/content-version.js";
+import { MAX_SEARCH_QUERY_OUTPUT_BYTES } from "../../src/core/search/query-limits.js";
 
 test("search_query scopes the files read and retains exact versions and whole-Vault defaults", async (t) => {
   const fixture = await createFixture(t);
@@ -60,8 +62,23 @@ test("search_query scopes the files read and retains exact versions and whole-Va
     assert.deepEqual(reads, paths, JSON.stringify(options));
     assert.deepEqual(results, paths.map(filename => ({
       filename, result: filename, version: computeContentVersion(files.get(filename)!),
+      versionGuard: getVersionGuard(computeContentVersion(files.get(filename)!)),
     })));
   }
+});
+
+test("search_query includes each version guard in its aggregate output budget", async (t) => {
+  const fixture = await createFixture(t);
+  const names = ["A.md", "B.md", "C.md", "D.md"];
+  const guardBytes = Buffer.byteLength(',"versionGuard":"0123456789abcdef"', "utf8");
+  const entryOverhead = 2 + Buffer.byteLength(names[0]!, "utf8") + 128 + guardBytes;
+  const content = "x".repeat(MAX_SEARCH_QUERY_OUTPUT_BYTES / names.length - entryOverhead);
+  for (const name of names) await writeFile(path.join(fixture.vault, name), content);
+  assert.equal((await runQuery(fixture, { var: "content" })).length, names.length);
+  await writeFile(path.join(fixture.vault, names.at(-1)!), content + "x");
+  await assert.rejects(runQuery(fixture, { var: "content" }), (error: unknown) =>
+    error instanceof VaultSearchQueryBudgetExceededError &&
+    error.budget === "maxOutputBytes" && error.observedAtLeast === BigInt(MAX_SEARCH_QUERY_OUTPUT_BYTES + 1));
 });
 
 test("search_query scope prunes traversal and read budgets while path predicates do not", async (t) => {

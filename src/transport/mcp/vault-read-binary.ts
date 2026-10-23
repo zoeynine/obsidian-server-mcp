@@ -26,14 +26,17 @@ export type VaultBinaryLinkProvider = (file: VaultBinaryReference) => Promise<{
 }>;
 
 const version = z.string().regex(/^sha256:[0-9a-f]{64}$/u);
+const versionGuard = z.string().length(16).regex(/^[0-9a-f]{16}$/u);
 const base = { path: z.string(), mimeType: z.string(), sizeBytes: z.number().int().nonnegative() };
-const output = z.discriminatedUnion("delivery", [
-  z.object({ ...base, version, delivery: z.literal("image"), outputMimeType: z.literal("image/webp"),
+const linkOutput = { ...base, delivery: z.literal("link"), uri: z.string(), expiresAt: z.string(),
+  reason: z.enum(["requested", "download", "too_large", "image_preview_unavailable"]) };
+const output = z.union([
+  z.object({ ...base, version, versionGuard, delivery: z.literal("image"), outputMimeType: z.literal("image/webp"),
     outputSizeBytes: z.number().int().nonnegative(), width: z.number().int().positive(), height: z.number().int().positive(),
     preview: z.literal(true), firstFrameOnly: z.boolean() }).strict(),
-  z.object({ ...base, version, delivery: z.literal("bytes"), uri: z.string() }).strict(),
-  z.object({ ...base, version: version.optional(), delivery: z.literal("link"), uri: z.string(), expiresAt: z.string(),
-    reason: z.enum(["requested", "download", "too_large", "image_preview_unavailable"]) }).strict(),
+  z.object({ ...base, version, versionGuard, delivery: z.literal("bytes"), uri: z.string() }).strict(),
+  z.object({ ...linkOutput, version, versionGuard }).strict(),
+  z.object(linkOutput).strict(),
 ]);
 
 export function registerVaultBinaryTool(
@@ -79,7 +82,8 @@ export function registerVaultBinaryTool(
 
 async function binaryToolResult(result: VaultBinaryResult, createLink?: VaultBinaryLinkProvider): Promise<CallToolResult> {
   const info: VaultBinaryReference = { path: result.path, mimeType: result.mimeType, sizeBytes: result.sizeBytes,
-    ...(result.version === undefined ? {} : { version: result.version }) };
+    ...(result.version === undefined ? {} : { version: result.version,
+      ...(result.versionGuard === undefined ? {} : { versionGuard: result.versionGuard }) }) };
   if (result.kind === "image") {
     return { content: [{ type: "image", data: result.data.toString("base64"), mimeType: result.outputMimeType }],
       structuredContent: { ...info, delivery: "image", outputMimeType: result.outputMimeType,

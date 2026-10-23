@@ -1,10 +1,9 @@
 import * as assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import * as path from "node:path";
 import test, { type TestContext } from "node:test";
 import { VaultPathError, VaultPathSandbox } from "../../src/core/path/vault-path.js";
-import { computeContentVersion, InvalidContentVersionError, VersionConflictError } from "../../src/core/version/content-version.js";
+import { computeContentVersion, getVersionGuard, InvalidContentVersionError, VersionConflictError, VersionGuardConflictError } from "../../src/core/version/content-version.js";
 import { VaultDocumentNotFoundError, VaultDocumentTooLargeError } from "../../src/core/file/read-vault-document.js";
 import { VaultTextError } from "../../src/core/file/text-policy.js";
 import { nativeMutationIO, type MutationIO } from "../../src/core/mutation/mutation-io.js";
@@ -12,7 +11,9 @@ import { MAX_TEXT_REPLACEMENT_INPUT_BYTES } from "../../src/core/mutation/prepar
 import { VaultMutationError, VaultMutationStore } from "../../src/core/mutation/vault-mutations.js";
 
 async function fixture(t: TestContext, options: { io?: MutationIO; maxBytes?: number } = {}) {
-  const root = await mkdtemp(path.join(tmpdir(), "obsidian-text-replacement-"));
+  const temporary = path.resolve(".test-dist", ".test-tmp");
+  await mkdir(temporary, { recursive: true });
+  const root = await mkdtemp(path.join(temporary, "obsidian-text-replacement-"));
   const vault = path.join(root, "vault");
   await mkdir(vault);
   t.after(async () => { await rm(root, { recursive: true, force: true }); });
@@ -36,6 +37,7 @@ test("replacement preserves exact bytes outside a unique literal match without p
   const result = await f.store.replaceText("note.md", oldText, newText, { ifMatch: computeContentVersion(original) });
   assert.deepEqual(await readFile(path.join(f.vault, "note.md")), Buffer.from(expected));
   assert.deepEqual(result, { message: "OK", path: "note.md", version: computeContentVersion(Buffer.from(expected)),
+    versionGuard: getVersionGuard(computeContentVersion(Buffer.from(expected))),
     beforeSizeBytes: Buffer.byteLength(original), sizeBytes: Buffer.byteLength(expected), created: false, replacementCount: 1 });
   assert.deepEqual(await readdir(f.vault), ["note.md"]);
 });
@@ -95,7 +97,7 @@ test("empty replacement deletes the unique match and can produce an empty existi
   assert.equal(empty.replacementCount, 1);
 });
 
-test("replacement requires a full current version and never creates a missing target", async t => {
+test("replacement requires a current version precondition and never creates a missing target", async t => {
   let writes = 0;
   const f = await fixture(t, { io: { ...nativeMutationIO, writeFile: async (h, bytes) => {
     writes++; await nativeMutationIO.writeFile(h, bytes);
@@ -166,38 +168,48 @@ test("old and resulting document sizes inherit the store exact-byte budget", asy
 });
 
 test("same-path replacements serialize across stores and never retry a stale version", async t => {
-  let writes = 0;
-  const f = await fixture(t, { io: { ...nativeMutationIO, writeFile: async (h, bytes) => {
-    writes++; await nativeMutationIO.writeFile(h, bytes);
-  } } });
-  const second = await VaultMutationStore.create(f.sandbox, f.options);
-  await writeFile(path.join(f.vault, "note.md"), "old");
-  const options = { ifMatch: computeContentVersion("old") as string };
-  const first = f.store.replaceText("note.md", "old", "one", options);
-  const pending = second.replaceText("note.md", "old", "two", options);
-  options.ifMatch = "changed by caller after invocation";
-  const results = await Promise.allSettled([first, pending]);
-  assert.equal(results.filter(r => r.status === "fulfilled").length, 1);
-  assert.ok(results.some(r => r.status === "rejected" && r.reason instanceof VersionConflictError));
-  assert.equal(writes, 1);
-  assert.deepEqual(await readFile(path.join(f.vault, "note.md")), Buffer.from("one"));
-  assert.deepEqual(await readdir(f.vault), ["note.md"]);
+  for (const kind of ["full", "guard"] as const) await t.test(kind, async t => {
+    let writes = 0;
+    const f = await fixture(t, { io: { ...nativeMutationIO, writeFile: async (h, bytes) => {
+      writes++; await nativeMutationIO.writeFile(h, bytes);
+    } } });
+    const second = await VaultMutationStore.create(f.sandbox, f.options);
+    await writeFile(path.join(f.vault, "note.md"), "old");
+    const version = computeContentVersion("old");
+    const options = kind === "full" ? { ifMatch: version as string } : { ifMatchGuard: getVersionGuard(version) as string };
+    const first = f.store.replaceText("note.md", "old", "one", options);
+    const pending = second.replaceText("note.md", "old", "two", options);
+    if (kind === "full") options.ifMatch = "changed by caller after invocation";
+    else options.ifMatchGuard = "changed by caller after invocation";
+    const results = await Promise.allSettled([first, pending]);
+    assert.equal(results.filter(r => r.status === "fulfilled").length, 1);
+    const conflict = kind === "full" ? VersionConflictError : VersionGuardConflictError;
+    assert.ok(results.some(r => r.status === "rejected" && r.reason instanceof conflict));
+    assert.equal(writes, 1);
+    assert.deepEqual(await readFile(path.join(f.vault, "note.md")), Buffer.from("one"));
+    assert.deepEqual(await readdir(f.vault), ["note.md"]);
+  });
 });
 
 test("external changes after replacement staging are preserved without publication or retry", async t => {
-  let vault = ""; let writes = 0; let publishes = 0;
-  const f = await fixture(t, { io: { ...nativeMutationIO,
-    writeFile: async (h, bytes) => { writes++; await nativeMutationIO.writeFile(h, bytes); },
-    syncFile: async h => { await nativeMutationIO.syncFile(h); await writeFile(path.join(vault, "note.md"), "SYNC"); },
-    rename: async (a, b) => { publishes++; await nativeMutationIO.rename(a, b); },
-  } });
-  vault = f.vault;
-  await writeFile(path.join(vault, "note.md"), "old");
-  await assert.rejects(f.store.replaceText("note.md", "old", "new", { ifMatch: computeContentVersion("old") }), VersionConflictError);
-  assert.equal(writes, 1);
-  assert.equal(publishes, 0);
-  assert.deepEqual(await readFile(path.join(vault, "note.md")), Buffer.from("SYNC"));
-  assert.deepEqual(await readdir(vault), ["note.md"]);
+  for (const kind of ["full", "guard"] as const) await t.test(kind, async t => {
+    let vault = ""; let writes = 0; let publishes = 0;
+    const f = await fixture(t, { io: { ...nativeMutationIO,
+      writeFile: async (h, bytes) => { writes++; await nativeMutationIO.writeFile(h, bytes); },
+      syncFile: async h => { await nativeMutationIO.syncFile(h); await writeFile(path.join(vault, "note.md"), "SYNC"); },
+      rename: async (a, b) => { publishes++; await nativeMutationIO.rename(a, b); },
+    } });
+    vault = f.vault;
+    await writeFile(path.join(vault, "note.md"), "old");
+    const version = computeContentVersion("old");
+    const options = kind === "full" ? { ifMatch: version } : { ifMatchGuard: getVersionGuard(version) };
+    await assert.rejects(f.store.replaceText("note.md", "old", "new", options), (error: unknown) =>
+      error instanceof VersionConflictError && error.expected === version && error.actual === computeContentVersion("SYNC"));
+    assert.equal(writes, 1);
+    assert.equal(publishes, 0);
+    assert.deepEqual(await readFile(path.join(vault, "note.md")), Buffer.from("SYNC"));
+    assert.deepEqual(await readdir(vault), ["note.md"]);
+  });
 });
 
 test("replacement write, fsync and rename failures retain original bytes and clean staging", async t => {

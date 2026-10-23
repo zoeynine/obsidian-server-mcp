@@ -28,16 +28,16 @@ has its own [bounded reference contract](reference-query.md). Stock stdio expose
 | Tool | Pinned Local REST contract | Filesystem implementation / deliberate boundary |
 | --- | --- | --- |
 | `vault_list` | Optional directory `path`; `{files: string[]}` with `/` on directory names | Same names and shape; accepts a directory suffix. Sorted, bounded, complete-or-error. Includes real empty directories; omits symlinks, special and protected entries. A nonexistent directory is an error. |
-| `vault_read` | Full NoteJson, or `targetType` + `target`, optional `scope` | Full filesystem-supported NoteJson plus exact-byte version. Targeted result uses `{path,version,result}` so scalar/array results have a stable object envelope. |
-| `vault_get_document_map` | Nested `headings`, ordered `blocks`, `frontmatterFields`, `version` | Uses the pinned parser/projection, including duplicate addresses and setext headings. Adds path; replaces the six-hex parser hash with exact-byte SHA-256. The obsolete ATX-only parser is removed. |
-| `vault_write` | `path`, text `content`; creates parents and unconditionally overwrites | Implemented through the shared commit layer. Existing files require `ifMatch`; no force bypass. Missing files reject a supplied token. |
-| `vault_append` | `path`, text `content`; creates missing file; existing content receives LF first unless it ends in LF | Implemented through the shared commit layer, including the existing-empty-file LF case. Existing files require `ifMatch`; no transparent retries. |
-| `vault_patch` | One generic instruction with operation, scope, target and one payload carrier | Generic preparation plus shared atomic commit, required exact-byte `ifMatch`, no retries. Frontmatter operation table below is covered by fixtures. Never a specialized metadata tool. |
-| `vault_replace_text` | No pinned counterpart; independent server extension | Exactly `path`, `oldText`, `newText`, `ifMatch`. Whole-file literal, case-sensitive replacement of a unique nonempty old string in an existing text file; shared atomic commit and text limits, no parser or automatic retry. |
-| `search_query` | JsonLogic evaluated against each Markdown NoteJson; retains the truthy result | Pinned engine, with filesystem-supported fields and safety limits. Core array of `{filename,result,version}`; MCP `{results:[...]}` avoids protocol-dependent root-array wrapping. |
+| `vault_read` | Full NoteJson, or `targetType` + `target`, optional `scope` | Full filesystem-supported NoteJson plus exact-byte version and versionGuard. Targeted result uses `{path,version,versionGuard,result}` so scalar/array results have a stable object envelope. |
+| `vault_get_document_map` | Nested `headings`, ordered `blocks`, `frontmatterFields`, `version` | Uses the pinned parser/projection, including duplicate addresses and setext headings. Adds path and versionGuard; replaces the six-hex parser hash with exact-byte SHA-256. The obsolete ATX-only parser is removed. |
+| `vault_write` | `path`, text `content`; creates parents and unconditionally overwrites | Implemented through the shared commit layer. Existing files require `ifMatch` or `ifMatchGuard`; no force bypass. Missing files reject a supplied token. |
+| `vault_append` | `path`, text `content`; creates missing file; existing content receives LF first unless it ends in LF | Implemented through the shared commit layer, including the existing-empty-file LF case. Existing files require `ifMatch` or `ifMatchGuard`; no transparent retries. |
+| `vault_patch` | One generic instruction with operation, scope, target and one payload carrier | Generic preparation plus shared atomic commit, required `ifMatch` or `ifMatchGuard`, no retries. Frontmatter operation table below is covered by fixtures. Never a specialized metadata tool. |
+| `vault_replace_text` | No pinned counterpart; independent server extension | `path`, `oldText`, `newText` and exactly one of `ifMatch` or `ifMatchGuard`. Whole-file literal, case-sensitive replacement of a unique nonempty old string in an existing text file; shared atomic commit and text limits, no parser or automatic retry. |
+| `search_query` | JsonLogic evaluated against each Markdown NoteJson; retains the truthy result | Pinned engine, with filesystem-supported fields and safety limits. Core array of `{filename,result,version,versionGuard}`; MCP `{results:[...]}` avoids protocol-dependent root-array wrapping. |
 | `tag_list` | `{tags:[{name,count}]}`; names omit `#`, nested parents included | Same shape; shares parsed properties with NoteJson. Existing conservative inline lexer, deterministic case folding and per-file counts remain filesystem approximations of the Desktop cache. |
-| `vault_move` | `path`, `destination`, optional `allowOverwrite` (false); `{message:"OK",oldPath,newPath}`; Desktop link/history updates | Same names, normalization, filename-preserving directory suffix, parent creation, overwrite flag and result. Optional source `ifMatch`. Filesystem move only; no link/history updates and no refusal based on backlinks. Same-filesystem only; details below. |
-| `vault_delete` | `path`, optional `permanent` (false); `{message:"OK"}`; Desktop trash preference | Same names/default and permanent option. Default uses Vault-local `.trash`, without Desktop preference lookup. Adds path/permanent and recoverable trashPath receipt. Optional `ifMatch`. Regular files only; directory gap described below. |
+| `vault_move` | `path`, `destination`, optional `allowOverwrite` (false); `{message:"OK",oldPath,newPath}`; Desktop link/history updates | Same names, normalization, filename-preserving directory suffix, parent creation, overwrite flag and result. Optional source `ifMatch` or `ifMatchGuard`. Filesystem move only; no link/history updates and no refusal based on backlinks. Same-filesystem only; details below. |
+| `vault_delete` | `path`, optional `permanent` (false); `{message:"OK"}`; Desktop trash preference | Same names/default and permanent option. Default uses Vault-local `.trash`, without Desktop preference lookup. Adds path/permanent and recoverable trashPath receipt. Optional `ifMatch` or `ifMatchGuard`. Regular files only; directory gap described below. |
 
 Binary reads and reference queries extend the surface without changing these
 text/mutation contracts. `search_simple` and Desktop/UI/event tools are not
@@ -138,7 +138,7 @@ subset rather than a claim to reproduce Obsidian's private parser.
 ## Generic frontmatter patch table
 
 All these cases use `targetType: "frontmatter"`, a string `target`, and required
-`ifMatch`. `scope` defaults to `content`. Validation and operation semantics
+`ifMatch` or `ifMatchGuard`. `scope` defaults to `content`. Validation and operation semantics
 come from the pinned generic patch schema/engine. Preparation never writes a
 file or retries a stale version. Payload JSON is bounded to 4 MiB.
 
@@ -190,8 +190,9 @@ on filesystems where those spellings identify distinct files.
 
 1. Lock by physical Vault root and NFC/case-folded relative path across stores
    in the same process. Different paths can progress independently.
-2. Safely read exact existing bytes and check SHA-256 `ifMatch`. Existing
-   write/append and every patch/exact replacement require it. Missing-file creation rejects a
+2. Safely read exact existing bytes and check full SHA-256 `ifMatch` or fixed
+   16-hex `ifMatchGuard`. Existing write/append and every patch/exact replacement
+   require exactly one. Pin the full observed hash after admission. Missing-file creation rejects a
    supplied token. Validate the new text and byte limit before filesystem edits.
 3. Create missing parent directories one checked component at a time. Write a
    complete, exclusively created `.obsidian-mcp-<random>.tmp` beside the target.
@@ -212,7 +213,7 @@ on filesystems where those spellings identify distinct files.
 The hidden temporary names are protected by the common path policy, including
 direct reads/mutations and list/query/tag discovery. A write failure before
 publication retains the original note. Success retains Local REST's
-`message: "OK"`, adding path, SHA-256 version, `beforeSizeBytes`, `sizeBytes`
+`message: "OK"`, adding path, SHA-256 version, versionGuard, `beforeSizeBytes`, `sizeBytes`
 and `created`, plus any warnings. `beforeSizeBytes` measures the original file;
 `sizeBytes` measures the saved file. Both are UTF-8 byte counts. Missing and
 empty files both have `beforeSizeBytes: 0`; `created` distinguishes them.
@@ -241,7 +242,7 @@ after verifying source and destination identities. Unsafe/failed cleanup returns
 `source_cleanup_failed` with both relative paths; callers must inspect them
 before retrying. No copy fallback, automatic retry, link rewriting or history
 integration is attempted. An identical path is the upstream no-op (even if
-missing); a supplied `ifMatch` still requires an existing matching file.
+missing); a supplied `ifMatch` or `ifMatchGuard` still requires an existing matching file.
 
 Recoverable delete reserves a unique `.trash/<timestamp-UUID>/` directory, then
 revalidates and renames the file into it. This is Vault-local trash, independent
@@ -252,13 +253,28 @@ is denied. `permanent: true` uses checked unlink. Trash failure or cross-device
 rename never falls back to permanent deletion or copying.
 
 Move and delete accept attachments without text decoding. Optional `ifMatch`
-hashes exact bytes with a 64 MiB cap; omission retains upstream current-path
+or `ifMatchGuard` hashes exact bytes with a 64 MiB cap; omission retains upstream current-path
 behavior without a content read or size cap. Every operation rejects symlinks,
 protected paths and additional hard links. Both are file operations here.
 Upstream move requires a TFile; upstream recoverable delete's implementation can
 also accept a TFolder despite its file-oriented public description. This server
 rejects directories because a whole-tree move/delete could bypass protected
 descendant checks. Recursive folder deletion is not implemented.
+
+### Short version guard extension
+
+Every successful output carrying `version` also carries `versionGuard`, derived
+from that same SHA-256 observation. No-version links and move/delete receipts
+remain unversioned. The fixed 16 lowercase hex guard can be copied directly
+as `ifMatchGuard`; it is never accepted in the original full `ifMatch` field.
+Dual inputs are refused even if both match. Both tool profiles share the
+contract, and no parser hash, session cache or lease is involved.
+
+This 64-bit prefix has weaker collision resistance than SHA-256 (random pair
+about 2^-64; birthday scale about 2^32 versions), so full `ifMatch` remains the
+stronger option. After the initial precondition check, full hashes are used
+for every in-flight recheck. Neither token detects identical-content ABA
+history or eliminates the existing cross-process check/publication window.
 
 ## Deployment permissions and Linux qualification
 

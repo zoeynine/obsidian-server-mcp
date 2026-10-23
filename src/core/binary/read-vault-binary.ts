@@ -1,7 +1,7 @@
 import mime from "mime-types";
 import sharp from "sharp";
 import type { VaultPathSandbox } from "../path/vault-path.js";
-import type { ContentVersion } from "../version/content-version.js";
+import type { ContentVersion, VersionGuard } from "../version/content-version.js";
 import {
   inspectVaultFile, readVaultFileBytes, MAX_VAULT_DOCUMENT_BYTES,
   type VaultFileInfo,
@@ -21,8 +21,9 @@ export interface VaultBinaryReference {
   readonly sizeBytes: number;
   /** Present only when the original file's complete bytes have been read. */
   readonly version?: ContentVersion;
+  readonly versionGuard?: VersionGuard;
 }
-type InlineReference = VaultBinaryReference & { readonly version: ContentVersion; readonly data: Buffer };
+type InlineReference = VaultBinaryReference & { readonly version: ContentVersion; readonly versionGuard: VersionGuard; readonly data: Buffer };
 export type VaultBinaryLinkReason = "requested" | "download" | "too_large" | "image_preview_unavailable";
 export type VaultBinaryResult =
   | (InlineReference & { readonly kind: "bytes" })
@@ -57,7 +58,7 @@ export async function readVaultBinary(
   const mimeType = mime.lookup(inputPath) || "application/octet-stream";
   if (mode === "bytes") {
     const file = await readVaultFileBytes(sandbox, inputPath, { maxBytes: MAX_BINARY_BYTES });
-    return { ...reference(file, mimeType), version: file.version, kind: "bytes", data: file.bytes };
+    return { ...reference(file, mimeType), version: file.version, versionGuard: file.versionGuard, kind: "bytes", data: file.bytes };
   }
 
   // Open (rather than stat alone) so filesystem read permissions remain authoritative,
@@ -69,7 +70,7 @@ export async function readVaultBinary(
   if (previewTypes.has(mimeType)) {
     if (info.sizeBytes > MAX_BINARY_IMAGE_SOURCE_BYTES) return { ...ref, kind: "link", reason: "too_large" };
     const file = await readVaultFileBytes(sandbox, inputPath, { maxBytes: MAX_BINARY_IMAGE_SOURCE_BYTES });
-    const source = { ...reference(file, mimeType), version: file.version };
+    const source = { ...reference(file, mimeType), version: file.version, versionGuard: file.versionGuard };
     const preview = await renderPreview(file.bytes);
     if (!preview) return { ...source, kind: "link", reason: "image_preview_unavailable" };
     return { ...source, kind: "image", ...preview };

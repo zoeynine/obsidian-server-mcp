@@ -26,7 +26,7 @@ requires that exact anchor, not a link to the containing file or another anchor.
 scope, including ones that may not refer to the requested target. This prevents
 discarding potential incoming references whose identity cannot be established.
 
-Each occurrence has `source: {path, version}`, `raw`, `href`, `syntax`, `embed`,
+Each occurrence has `source: {path, version, versionGuard}`, `raw`, `href`, `syntax`, `embed`,
 `start/end`, `line/column`, `status/reason`, and, when known, `destination` or
 `candidates`. Offsets are zero-based, half-open JavaScript UTF-16 string indices
 into the exact source returned by a read, including BOM/CRLF. Lines and UTF-16

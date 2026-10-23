@@ -19,7 +19,7 @@ import {
 import { toNoteJson, type JsonValue } from "../document/note-json.js";
 import { validateQuery, QueryEvaluator } from "./json-logic-query.js";
 import { MAX_SEARCH_QUERY_OUTPUT_BYTES } from "./query-limits.js";
-import type { ContentVersion } from "../version/content-version.js";
+import type { ContentVersion, VersionGuard } from "../version/content-version.js";
 
 export const DEFAULT_SEARCH_QUERY_MAX_ENTRIES =
   DEFAULT_VAULT_MARKDOWN_SCAN_MAX_ENTRIES;
@@ -61,6 +61,7 @@ export interface SearchVaultQueryResultEntry {
   readonly result: JsonValue;
   /** Exact-byte version of the content evaluated for this result. */
   readonly version: ContentVersion;
+  readonly versionGuard: VersionGuard;
 }
 
 export type SearchQueryBudgetName =
@@ -263,7 +264,8 @@ export async function searchVaultQuery(
       async (document) => {
         const { result, bytes } = await evaluator.evaluate(toNoteJson(document));
         if (result === null) return;
-        resultBytes += bytes + Buffer.byteLength(document.path, "utf8") + 128;
+        const guardBytes = Buffer.byteLength(`,"versionGuard":${JSON.stringify(document.versionGuard)}`, "utf8");
+        resultBytes += bytes + Buffer.byteLength(document.path, "utf8") + 128 + guardBytes;
         if (resultBytes > MAX_SEARCH_QUERY_OUTPUT_BYTES) {
           throw new VaultSearchQueryBudgetExceededError(
             "maxOutputBytes", MAX_SEARCH_QUERY_OUTPUT_BYTES, BigInt(resultBytes),
@@ -284,6 +286,7 @@ export async function searchVaultQuery(
             filename: document.path,
             result,
             version: document.version,
+            versionGuard: document.versionGuard,
           }),
         );
       },

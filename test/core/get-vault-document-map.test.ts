@@ -12,6 +12,7 @@ import {
   getVaultDocumentMap,
   readVaultDocument,
 } from "../../src/core/index.js";
+import { getVersionGuard } from "../../src/core/version/content-version.js";
 
 test("maps one safely read document and pins ranges to its exact-byte version", async (t) => {
   const fixture = await createFixture(t);
@@ -29,6 +30,7 @@ test("maps one safely read document and pins ranges to its exact-byte version", 
 
   assert.equal(result.path, "note.md");
   assert.equal(result.version, computeContentVersion(bytes));
+  assert.equal(result.versionGuard, getVersionGuard(computeContentVersion(bytes)));
   assert.deepEqual(JSON.parse(JSON.stringify(result.headings)), { 总览: { 细节: {} } });
   assert.deepEqual(result.blocks, []);
   assert.deepEqual(result.frontmatterFields, []);

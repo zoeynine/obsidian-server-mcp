@@ -1,4 +1,5 @@
 import { readVaultNote } from "../../src/core/document/read-vault-note.js";
+import { getVersionGuard } from "../../src/core/version/content-version.js";
 import { DEFAULT_MAX_VAULT_DOCUMENT_BYTES, VaultDocumentTooLargeError } from "../../src/core/file/read-vault-document.js";
 import * as assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
@@ -380,7 +381,7 @@ test("tools/call vault_get_document_map returns a version-pinned heading map", a
   });
 
   assert.notEqual(result.isError, true);
-  assert.deepEqual(JSON.parse(JSON.stringify(result.structuredContent)), {path: "map.md", version: computeContentVersion(bytes), headings: {总览: {细节: {}}}, blocks: [], frontmatterFields: []});
+  assert.deepEqual(JSON.parse(JSON.stringify(result.structuredContent)), {path: "map.md", version: computeContentVersion(bytes), versionGuard: getVersionGuard(computeContentVersion(bytes)), headings: {总览: {细节: {}}}, blocks: [], frontmatterFields: []});
   assert.deepEqual(result.content, []);
 });
 
@@ -480,6 +481,7 @@ test("tools/call search_query returns versioned boolean results in structuredCon
       filename: "query.md",
       result: true,
       version: computeContentVersion(bytes),
+      versionGuard: getVersionGuard(computeContentVersion(bytes)),
     },
   ];
   assert.deepEqual(result.structuredContent, { results: expected });
@@ -546,7 +548,7 @@ test("search_query accepts optional directory scope while tag_list retains its w
     assert.notEqual(result.isError, true);
     assert.deepEqual(result.content, []);
     assert.deepEqual(result.structuredContent, { results: paths.map(filename => ({
-      filename, result: filename, version: computeContentVersion(bytes),
+      filename, result: filename, version: computeContentVersion(bytes), versionGuard: getVersionGuard(computeContentVersion(bytes)),
     })) });
   }
   const tags = await harness.client.callTool({ name: TAG_LIST_TOOL_NAME, arguments: {} });
@@ -829,11 +831,11 @@ test("targeted and non-boolean query results travel only in structuredContent", 
   assert.deepEqual(full.content, []);
   assert.equal((full.structuredContent as {content: string}).content, source);
   const targeted = await harness.client.callTool({ name: VAULT_READ_TOOL_NAME, arguments: { path: "note.md", targetType: "frontmatter", target: "status" } });
-  assert.deepEqual(targeted.structuredContent, { path: "note.md", version: computeContentVersion(source), result: "done" });
+  assert.deepEqual(targeted.structuredContent, { path: "note.md", version: computeContentVersion(source), versionGuard: getVersionGuard(computeContentVersion(source)), result: "done" });
   assert.deepEqual(targeted.content, []);
   const query = await harness.client.callTool({ name: SEARCH_QUERY_TOOL_NAME, arguments: { query: {var: "frontmatter.status"} } });
   assert.notEqual(query.isError, true, JSON.stringify(query));
-  assert.deepEqual(query.structuredContent, {results: [{filename: "note.md", version: computeContentVersion(source), result: "done"}]});
+  assert.deepEqual(query.structuredContent, {results: [{filename: "note.md", version: computeContentVersion(source), versionGuard: getVersionGuard(computeContentVersion(source)), result: "done"}]});
   assert.deepEqual(query.content, []);
 });
 
@@ -875,7 +877,7 @@ test("write, append and generic frontmatter patch use one structured compact com
   assert.ok(JSON.stringify(created.structuredContent).length < 500);
   const firstVersion = (created.structuredContent as {version: string}).version;
   assert.equal(firstVersion, computeContentVersion(source));
-  assert.deepEqual(created.structuredContent, { message: "OK", path: "folder/note.md", version: firstVersion,
+  assert.deepEqual(created.structuredContent, { message: "OK", path: "folder/note.md", version: firstVersion, versionGuard: getVersionGuard(computeContentVersion(source)),
     beforeSizeBytes: 0, sizeBytes: Buffer.byteLength(source), created: true });
   const required = await harness.client.callTool({ name: VAULT_APPEND_TOOL_NAME, arguments: { path: "folder/note.md", content: "next" } });
   assert.equal(required.isError, true);
@@ -885,7 +887,7 @@ test("write, append and generic frontmatter patch use one structured compact com
   assert.deepEqual(appended.content, []);
   const secondVersion = (appended.structuredContent as {version: string}).version;
   assert.equal(secondVersion, computeContentVersion(source + "\nnext"));
-  assert.deepEqual(appended.structuredContent, { message: "OK", path: "folder/note.md", version: secondVersion,
+  assert.deepEqual(appended.structuredContent, { message: "OK", path: "folder/note.md", version: secondVersion, versionGuard: getVersionGuard(computeContentVersion(source + "\nnext")),
     beforeSizeBytes: Buffer.byteLength(source), sizeBytes: Buffer.byteLength(source + "\nnext"), created: false });
   const stale = await harness.client.callTool({ name: VAULT_APPEND_TOOL_NAME, arguments: { path: "folder/note.md", content: "twice", ifMatch: firstVersion } });
   assert.equal(readToolError(stale).code, "vault_mutation.version_conflict");
@@ -893,7 +895,7 @@ test("write, append and generic frontmatter patch use one structured compact com
   assert.notEqual(patched.isError, true, JSON.stringify(patched));
   assert.deepEqual(patched.content, []);
   const saved = await readFile(path.join(harness.vault, "folder/note.md"), "utf8");
-  assert.deepEqual(patched.structuredContent, { message: "OK", path: "folder/note.md", version: computeContentVersion(saved),
+  assert.deepEqual(patched.structuredContent, { message: "OK", path: "folder/note.md", version: computeContentVersion(saved), versionGuard: getVersionGuard(computeContentVersion(saved)),
     beforeSizeBytes: Buffer.byteLength(source + "\nnext"), sizeBytes: Buffer.byteLength(saved), created: false });
   const read = await harness.client.callTool({ name: VAULT_READ_TOOL_NAME, arguments: { path: "folder/note.md", targetType: "frontmatter", target: "status" } });
   assert.equal((read.structuredContent as {result: unknown}).result, "done");

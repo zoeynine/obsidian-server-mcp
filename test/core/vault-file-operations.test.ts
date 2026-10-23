@@ -1,16 +1,17 @@
 import * as assert from "node:assert/strict";
 import { link, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import * as path from "node:path";
 import test, { type TestContext } from "node:test";
 import { VaultPathError, VaultPathSandbox } from "../../src/core/path/vault-path.js";
-import { computeContentVersion, VersionConflictError } from "../../src/core/version/content-version.js";
+import { computeContentVersion, getVersionGuard, VersionConflictError, VersionGuardConflictError } from "../../src/core/version/content-version.js";
 import { VaultMutationError, VaultMutationStore } from "../../src/core/mutation/vault-mutations.js";
 import { nativeMutationIO, type MutationIO } from "../../src/core/mutation/mutation-io.js";
 import { listVaultFiles, listVaultTags, readVaultDocument, searchVaultQuery } from "../../src/core/index.js";
 
 async function fixture(t: TestContext, io: MutationIO = nativeMutationIO) {
-  const root = await mkdtemp(path.join(tmpdir(), "obsidian-file-ops-"));
+  const temporary = path.resolve(".test-dist", ".test-tmp");
+  await mkdir(temporary, { recursive: true });
+  const root = await mkdtemp(path.join(temporary, "obsidian-file-ops-"));
   const vault = path.join(root, "vault");
   await mkdir(vault);
   t.after(async () => { await rm(root, { recursive: true, force: true }); });
@@ -101,15 +102,31 @@ test("move cleanup failure preserves both copies and reports paths without retry
 });
 
 test("move detects a source edit after link publication and safely rolls back without retry", async t => {
-  let calls = 0;
-  const f = await fixture(t, { ...nativeMutationIO, link: async (source, target) => {
-    calls++; await nativeMutationIO.link(source, target); await writeFile(source, "external edit");
-  } });
-  await writeFile(path.join(f.vault, "source.md"), "original");
-  await assert.rejects(f.store.move("source.md", "target.md", { ifMatch: computeContentVersion("original") }), VersionConflictError);
-  assert.equal(calls, 1);
-  assert.equal(await readFile(path.join(f.vault, "source.md"), "utf8"), "external edit");
-  await missing(path.join(f.vault, "target.md"));
+  for (const kind of ["full", "guard"] as const) await t.test(kind, async t => {
+    let calls = 0; let sourceUnlinks = 0; let rollbacks = 0;
+    const f = await fixture(t, { ...nativeMutationIO,
+      link: async (source, target) => {
+        calls++; await nativeMutationIO.link(source, target); await writeFile(source, "external edit");
+      },
+      unlink: async filename => {
+        if (path.basename(filename) === "source.md") sourceUnlinks++;
+        if (path.basename(filename) === "target.md") rollbacks++;
+        await nativeMutationIO.unlink(filename);
+      },
+    });
+    await writeFile(path.join(f.vault, "source.md"), "original");
+    const version = computeContentVersion("original");
+    const options = kind === "full" ? { ifMatch: version } : { ifMatchGuard: getVersionGuard(version) };
+    await assert.rejects(f.store.move("source.md", "target.md", options), (error: unknown) =>
+      error instanceof VersionConflictError && error.expected === version && error.actual === computeContentVersion("external edit"));
+    assert.equal(calls, 1);
+    assert.equal(sourceUnlinks, 0);
+    assert.equal(rollbacks, 1);
+    assert.equal(await readFile(path.join(f.vault, "source.md"), "utf8"), "external edit");
+    await missing(path.join(f.vault, "target.md"));
+    assert.equal((await lstat(path.join(f.vault, "source.md"))).nlink, 1);
+    assert.deepEqual(await readdir(f.vault), ["source.md"]);
+  });
 });
 
 test("move rollback refuses changed destinations and the sole surviving file", async t => {
@@ -156,31 +173,48 @@ test("delete defaults to unique protected Vault trash and preserves attachment b
 });
 
 test("delete preserves the permanent flag, missing-file failure and optional exact-byte precondition", async t => {
-  const f = await fixture(t);
-  const content = "\uFEFFline\r\n";
-  await writeFile(path.join(f.vault, "note.md"), content);
-  await assert.rejects(f.store.delete("note.md", { ifMatch: computeContentVersion(content.slice(1)) }), VersionConflictError);
-  assert.deepEqual(await readdir(f.vault), ["note.md"]);
-  assert.deepEqual(await f.store.delete("note.md", { permanent: true, ifMatch: computeContentVersion(content) }), {
-    message: "OK", path: "note.md", permanent: true,
+  for (const kind of ["full", "guard"] as const) await t.test(kind, async t => {
+    const f = await fixture(t);
+    const content = "\uFEFFline\r\n";
+    await writeFile(path.join(f.vault, "note.md"), content);
+    const version = computeContentVersion(content);
+    const stale = computeContentVersion(content.slice(1));
+    const options = kind === "full" ? { ifMatch: version } : { ifMatchGuard: getVersionGuard(version) };
+    const staleOptions = kind === "full" ? { ifMatch: stale } : { ifMatchGuard: getVersionGuard(stale) };
+    await assert.rejects(f.store.delete("note.md", staleOptions), kind === "full" ? VersionConflictError : VersionGuardConflictError);
+    assert.deepEqual(await readdir(f.vault), ["note.md"]);
+    assert.deepEqual(await f.store.delete("note.md", { permanent: true, ...options }), {
+      message: "OK", path: "note.md", permanent: true,
+    });
+    assert.deepEqual(await readdir(f.vault), []);
+    await assert.rejects(f.store.delete("note.md"), code("not_found"));
   });
-  assert.deepEqual(await readdir(f.vault), []);
-  await assert.rejects(f.store.delete("note.md"), code("not_found"));
 });
 
 test("delete rechecks exact bytes after reserving trash and cleans an aborted reservation", async t => {
-  const f = await fixture(t);
-  await writeFile(path.join(f.vault, "note.md"), "original");
-  const resolve = f.sandbox.resolveInternalTrash.bind(f.sandbox);
-  let changed = false;
-  f.sandbox.resolveInternalTrash = async (child = "", options = {}) => {
-    const result = await resolve(child, options);
-    if (!changed && child.includes("/")) { changed = true; await writeFile(path.join(f.vault, "note.md"), "external"); }
-    return result;
-  };
-  await assert.rejects(f.store.delete("note.md", { ifMatch: computeContentVersion("original") }), VersionConflictError);
-  assert.equal(await readFile(path.join(f.vault, "note.md"), "utf8"), "external");
-  assert.deepEqual(await readdir(path.join(f.vault, ".trash")), []);
+  for (const kind of ["full", "guard"] as const) await t.test(kind, async t => {
+    let publishes = 0; let unlinks = 0;
+    const f = await fixture(t, { ...nativeMutationIO,
+      rename: async (source, target) => { publishes++; await nativeMutationIO.rename(source, target); },
+      unlink: async filename => { unlinks++; await nativeMutationIO.unlink(filename); },
+    });
+    await writeFile(path.join(f.vault, "note.md"), "original");
+    const resolve = f.sandbox.resolveInternalTrash.bind(f.sandbox);
+    let changed = false;
+    f.sandbox.resolveInternalTrash = async (child = "", options = {}) => {
+      const result = await resolve(child, options);
+      if (!changed && child.includes("/")) { changed = true; await writeFile(path.join(f.vault, "note.md"), "external"); }
+      return result;
+    };
+    const version = computeContentVersion("original");
+    const options = kind === "full" ? { ifMatch: version } : { ifMatchGuard: getVersionGuard(version) };
+    await assert.rejects(f.store.delete("note.md", options), (error: unknown) =>
+      error instanceof VersionConflictError && error.expected === version && error.actual === computeContentVersion("external"));
+    assert.equal(publishes, 0);
+    assert.equal(unlinks, 0);
+    assert.equal(await readFile(path.join(f.vault, "note.md"), "utf8"), "external");
+    assert.deepEqual(await readdir(path.join(f.vault, ".trash")), []);
+  });
 });
 
 test("move and delete refuse escape, protected internals, aliases, directories and hard links", async t => {
@@ -266,27 +300,36 @@ test("rename, unlink and cross-device failures preserve files and never trigger 
 });
 
 test("move locks both paths across stores while delete and write wait without stale retries", async t => {
-  const entered = deferred(); const release = deferred();
-  const f = await fixture(t, { ...nativeMutationIO, rename: async (a, b) => {
-    entered.resolve(); await release.promise; await nativeMutationIO.rename(a, b);
-  } });
-  const other = await VaultMutationStore.create(f.sandbox);
-  await writeFile(path.join(f.vault, "source.md"), "source");
-  await writeFile(path.join(f.vault, "target.md"), "old target");
-  const moving = f.store.move("source.md", "target.md", { allowOverwrite: true });
-  await entered.promise;
-  const waiting = Promise.allSettled([
-    other.delete("source.md"),
-    other.write("target.md", "stale", { ifMatch: computeContentVersion("old target") }),
-  ]);
-  release.resolve();
-  await moving;
-  const results = await waiting;
-  assert.equal(results[0]?.status, "rejected");
-  assert.equal(results[1]?.status, "rejected");
-  if (results[1]?.status === "rejected") assert.ok(results[1].reason instanceof VersionConflictError);
-  assert.equal(await readFile(path.join(f.vault, "target.md"), "utf8"), "source");
-  assert.deepEqual(await readdir(f.vault), ["target.md"]);
+  for (const kind of ["full", "guard"] as const) await t.test(kind, async t => {
+    const entered = deferred(); const release = deferred();
+    let publishes = 0;
+    const f = await fixture(t, { ...nativeMutationIO, rename: async (a, b) => {
+      publishes++; entered.resolve(); await release.promise; await nativeMutationIO.rename(a, b);
+    } });
+    const other = await VaultMutationStore.create(f.sandbox);
+    await writeFile(path.join(f.vault, "source.md"), "source");
+    await writeFile(path.join(f.vault, "target.md"), "old target");
+    const source = computeContentVersion("source");
+    const target = computeContentVersion("old target");
+    const sourceOptions = kind === "full" ? { ifMatch: source } : { ifMatchGuard: getVersionGuard(source) };
+    const targetOptions = kind === "full" ? { ifMatch: target } : { ifMatchGuard: getVersionGuard(target) };
+    const moving = f.store.move("source.md", "target.md", { allowOverwrite: true, ...sourceOptions });
+    await entered.promise;
+    const waiting = Promise.allSettled([
+      other.delete("source.md", sourceOptions),
+      other.write("target.md", "stale", targetOptions),
+    ]);
+    release.resolve();
+    await moving;
+    const results = await waiting;
+    assert.equal(results[0]?.status, "rejected");
+    assert.equal(results[1]?.status, "rejected");
+    if (results[0]?.status === "rejected") assert.ok(results[0].reason instanceof VaultMutationError && results[0].reason.code === "not_found");
+    if (results[1]?.status === "rejected") assert.ok(results[1].reason instanceof (kind === "full" ? VersionConflictError : VersionGuardConflictError));
+    assert.equal(publishes, 1);
+    assert.equal(await readFile(path.join(f.vault, "target.md"), "utf8"), "source");
+    assert.deepEqual(await readdir(f.vault), ["target.md"]);
+  });
 });
 
 test("inverse moves and file-as-parent races terminate without nested-lock deadlock", {timeout: 5000}, async t => {

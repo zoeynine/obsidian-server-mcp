@@ -7,7 +7,7 @@ import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import {
   getVaultDocumentMap, listVaultFiles, listVaultTags, readVaultDocument,
   readVaultNote, searchVaultQuery, VaultMutationStore, VaultPathSandbox,
-  computeContentVersion, type ReadVaultDocumentOptions,
+  computeContentVersion, getVersionGuard, type ReadVaultDocumentOptions,
 } from "../../src/core/index.js";
 import { HELP_TOPICS } from "../../src/transport/mcp/help-content.generated.js";
 import { readObsidianHelp } from "../../src/transport/mcp/obsidian-help.js";
@@ -230,12 +230,14 @@ test("published patch examples append a sibling, set a property and move a secti
   const source = "# Root\n\n## A\n\nOld body.\n\n## B\n";
   for (const [index, example] of examples.entries()) {
     assert.equal(example["path"], "note.md");
-    assert.equal(example["ifMatch"], "<current version>");
+    const tokenKey = index === 1 ? "ifMatchGuard" : "ifMatch";
+    assert.equal(example[tokenKey], index === 1 ? "<current versionGuard>" : "<current version>");
     await writeFile(path.join(vault, "note.md"), source);
     const read = await client.callTool({ name: "vault_read", arguments: { path: "note.md" } });
     assert.notEqual(read.isError, true);
-    const { version } = read.structuredContent as { version: string };
-    const result = await client.callTool({ name: "vault_patch", arguments: { ...example, ifMatch: version } });
+    const { version, versionGuard } = read.structuredContent as { version: string; versionGuard: string };
+    const result = await client.callTool({ name: "vault_patch", arguments: { ...example,
+      [tokenKey]: index === 1 ? versionGuard : version } });
     assert.notEqual(result.isError, true, JSON.stringify(result));
     const output = await readFile(path.join(vault, "note.md"), "utf8");
     const map = await client.callTool({ name: "vault_get_document_map", arguments: { path: "note.md" } });
@@ -251,7 +253,7 @@ test("published patch examples append a sibling, set a property and move a secti
       await writeFile(path.join(vault, "note.md"), output.replace("status: ready", "status: draft"));
       const reread = await client.callTool({ name: "vault_read", arguments: { path: "note.md" } });
       const updated = await client.callTool({ name: "vault_patch", arguments: { ...example,
-        ifMatch: (reread.structuredContent as { version: string }).version } });
+        ifMatchGuard: (reread.structuredContent as { versionGuard: string }).versionGuard } });
       assert.notEqual(updated.isError, true, JSON.stringify(updated));
       assert.equal(await readFile(path.join(vault, "note.md"), "utf8"), output);
     } else {
@@ -267,21 +269,21 @@ test("published exact replacement example uses a whole-file read and literal rep
     arguments: { topic: "vault_replace_text" } })));
   assert.equal(examples.length, 1);
   const example = examples[0]!;
-  assert.deepEqual(Object.keys(example), ["path", "oldText", "newText", "ifMatch"]);
+  assert.deepEqual(Object.keys(example), ["path", "oldText", "newText", "ifMatchGuard"]);
   assert.equal(example["path"], "note.md");
-  assert.equal(example["ifMatch"], "<current version>");
+  assert.equal(example["ifMatchGuard"], "<current versionGuard>");
   const source = "# Root\n\n## A\nOld body.\n\n## B\nKeep me.\n";
   await writeFile(path.join(vault, "note.md"), source);
   const read = await client.callTool({ name: "vault_read", arguments: { path: "note.md" } });
   assert.notEqual(read.isError, true);
-  const whole = read.structuredContent as { content: string; version: string };
+  const whole = read.structuredContent as { content: string; version: string; versionGuard: string };
   assert.equal(whole.content, source);
   const oldText = example["oldText"] as string;
   const start = whole.content.indexOf(oldText);
   assert.ok(start >= 0);
   assert.equal(whole.content.slice(start, start + oldText.length), oldText);
   assert.equal(whole.content.indexOf(oldText, start + 1), -1);
-  const replaced = await client.callTool({ name: "vault_replace_text", arguments: { ...example, ifMatch: whole.version } });
+  const replaced = await client.callTool({ name: "vault_replace_text", arguments: { ...example, ifMatchGuard: whole.versionGuard } });
   assert.notEqual(replaced.isError, true, JSON.stringify(replaced));
   const expected = "# Root\n\n## A\nNew body. $& is literal.\n\n## B\nKeep me.\n";
   assert.equal(await readFile(path.join(vault, "note.md"), "utf8"), expected);
@@ -289,8 +291,43 @@ test("published exact replacement example uses a whole-file read and literal rep
   assert.equal(receipt["beforeSizeBytes"], Buffer.byteLength(source));
   assert.equal(receipt["sizeBytes"], Buffer.byteLength(expected));
   assert.equal(receipt["version"], computeContentVersion(expected));
+  assert.equal(receipt["versionGuard"], getVersionGuard(computeContentVersion(expected)));
   assert.equal(receipt["created"], false);
   assert.equal(receipt["replacementCount"], 1);
+});
+
+test("published guard examples for write, append, move and delete use server-returned tokens", async t => {
+  for (const options of [{}, { toolProfile: "text" }] as const) {
+    const { client, vault } = await createExampleClient(t, options);
+    for (const topic of ["vault_write", "vault_append", "vault_move", "vault_delete"]) {
+      const manual = helpText(await client.callTool({ name: OBSIDIAN_HELP_TOOL_NAME, arguments: { topic } }), options);
+      const example = jsonExamples(manual).find(value => "ifMatchGuard" in value)!;
+      assert.ok(example, topic);
+      assert.equal(example["ifMatchGuard"], "<current versionGuard>");
+      const source = "# Root\nOld body.\n";
+      await writeFile(path.join(vault, "note.md"), source);
+      const textProfile = "toolProfile" in options;
+      const read = await client.callTool({ name: textProfile ? "vault_read_text" : "vault_read",
+        arguments: { path: "note.md" } });
+      assert.notEqual(read.isError, true);
+      const metadata = textProfile && read.content[0]?.type === "text"
+        ? JSON.parse(read.content[0].text) as { versionGuard: string }
+        : read.structuredContent as { versionGuard: string };
+      assert.equal(metadata.versionGuard, getVersionGuard(computeContentVersion(source)));
+      const result = await client.callTool({ name: topic,
+        arguments: { ...example, ifMatchGuard: metadata.versionGuard } });
+      assert.notEqual(result.isError, true, JSON.stringify(result));
+      if (topic === "vault_write") {
+        assert.equal(await readFile(path.join(vault, "note.md"), "utf8"), example["content"]);
+      } else if (topic === "vault_append") {
+        assert.equal(await readFile(path.join(vault, "note.md"), "utf8"), source + example["content"]);
+      } else if (topic === "vault_move") {
+        assert.equal(await readFile(path.join(vault, example["destination"] as string), "utf8"), source);
+      } else {
+        await assert.rejects(readFile(path.join(vault, "note.md")), { code: "ENOENT" });
+      }
+    }
+  }
 });
 
 function helpText(result: ToolResult, options: VaultMcpServerOptions = {}): string {
@@ -365,7 +402,7 @@ async function createHelpClient(t: TestContext, options: VaultMcpServerOptions =
   return client;
 }
 
-async function createExampleClient(t: TestContext): Promise<{ client: Client; vault: string }> {
+async function createExampleClient(t: TestContext, options: VaultMcpServerOptions = {}): Promise<{ client: Client; vault: string }> {
   const workspace = path.resolve(".test-dist");
   await mkdir(workspace, { recursive: true });
   const vault = await mkdtemp(path.join(workspace, "obsidian-help-examples-"));
@@ -383,7 +420,7 @@ async function createExampleClient(t: TestContext): Promise<{ client: Client; va
     searchQuery: (query, options) => searchVaultQuery(sandbox, reader, query, options),
     tagList: options => listVaultTags(sandbox, reader, options),
     mutations: await VaultMutationStore.create(sandbox),
-  });
+  }, options);
   return { client, vault };
 }
 

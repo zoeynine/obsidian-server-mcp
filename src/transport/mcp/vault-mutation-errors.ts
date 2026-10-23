@@ -1,6 +1,7 @@
 import type { CallToolResult } from "@modelcontextprotocol/server";
 import { VaultMutationError } from "../../core/mutation/vault-mutations.js";
-import { InvalidContentVersionError, VersionConflictError } from "../../core/version/content-version.js";
+import { ConflictingVersionPreconditionsError, InvalidContentVersionError, InvalidVersionGuardError,
+  VersionConflictError, VersionGuardConflictError } from "../../core/version/content-version.js";
 import { isFilesystemPermissionError, toKnownVaultReadToolErrorPayload } from "./vault-read-errors.js";
 
 export function mapVaultMutationToolError(error: unknown, path: string): CallToolResult {
@@ -13,6 +14,13 @@ export function mapVaultMutationToolError(error: unknown, path: string): CallToo
   } : error instanceof VersionConflictError ? {
     error: { code: "vault_mutation.version_conflict", message: error.message,
       details: { path, expected: error.expected, actual: error.actual } },
+  } : error instanceof VersionGuardConflictError ? {
+    error: { code: "vault_mutation.version_conflict", message: error.message,
+      details: { path, expectedGuard: error.expected, actualGuard: error.actual } },
+  } : error instanceof ConflictingVersionPreconditionsError ? {
+    error: { code: "vault_mutation.conflicting_preconditions", message: error.message, details: { path } },
+  } : error instanceof InvalidVersionGuardError ? {
+    error: { code: "vault_mutation.invalid_version_guard", message: error.message, details: { path } },
   } : error instanceof InvalidContentVersionError ? {
     error: { code: "vault_mutation.invalid_version", message: error.message, details: { path } },
   } : {

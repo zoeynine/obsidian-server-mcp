@@ -3,12 +3,11 @@ import { isMap, isScalar, stringify } from "yaml";
 import { isDeepStrictEqual } from "node:util";
 import type { VaultDocumentReadResult } from "../file/read-vault-document.js";
 import { assertTextContent, assertTextPath } from "../file/text-policy.js";
-import { assertVersionMatch, computeContentVersion } from "../version/content-version.js";
+import { assertVersionPrecondition, computeContentVersion, parseVersionPrecondition, type VersionPreconditionInput } from "../version/content-version.js";
 import { parseFrontmatter, requireJson, VaultSemanticError, withoutBom } from "../document/note-json.js";
 import { validateMarkdownSource } from "../parser/structured-markdown.js";
 
-export type VaultPatchInstruction = InstructionInput & {
-  readonly ifMatch: string;
+export type VaultPatchInstruction = InstructionInput & VersionPreconditionInput & {
   readonly allowSubtreeReplacement?: boolean;
 };
 export const MAX_PATCH_INPUT_BYTES = 4 * 1024 * 1024;
@@ -19,13 +18,15 @@ export function prepareVaultPatch(document: VaultDocumentReadResult, input: unkn
   if (Buffer.byteLength(JSON.stringify(input), "utf8") > MAX_PATCH_INPUT_BYTES) {
     throw new VaultSemanticError("patch_limit", "Patch input exceeds 4 MiB");
   }
-  if (!input || typeof input !== "object" || !("ifMatch" in input) || typeof input.ifMatch !== "string") {
-    throw new VaultSemanticError("if_match_required", "vault_patch requires ifMatch from the document version");
+  const precondition = input && typeof input === "object"
+    ? parseVersionPrecondition(input as VersionPreconditionInput) : undefined;
+  if (!precondition) {
+    throw new VaultSemanticError("if_match_required", "vault_patch requires ifMatch or ifMatchGuard from the document read");
   }
-  assertVersionMatch(computeContentVersion(document.content), input.ifMatch);
-  const allowed = new Set(["targetType", "target", "within", "operation", "scope", "content", "value", "destination", "ifMatch", "createTargetIfMissing", "rejectIfContentPreexists", "allowSubtreeReplacement"]);
-  if (Object.keys(input).some(key => !allowed.has(key))) throw new VaultSemanticError("invalid_instruction", "Unknown patch instruction field");
-  const { allowSubtreeReplacement = false, ...engineInput } = input as Record<string, unknown>;
+  assertVersionPrecondition(computeContentVersion(document.content), precondition);
+  const allowed = new Set(["targetType", "target", "within", "operation", "scope", "content", "value", "destination", "ifMatch", "ifMatchGuard", "createTargetIfMissing", "rejectIfContentPreexists", "allowSubtreeReplacement"]);
+  if (Object.keys(input as object).some(key => !allowed.has(key))) throw new VaultSemanticError("invalid_instruction", "Unknown patch instruction field");
+  const { allowSubtreeReplacement = false, ifMatch: _full, ifMatchGuard: _guard, ...engineInput } = input as Record<string, unknown>;
   if (typeof allowSubtreeReplacement !== "boolean") {
     throw new VaultSemanticError("invalid_instruction", "allowSubtreeReplacement must be a boolean");
   }
@@ -67,7 +68,7 @@ function protectHeadingSubtree(source: string, instruction: InstructionInput, al
   }
   if (Object.keys(children).length > 0) {
     throw new VaultSemanticError("subtree_confirmation_required",
-      "Heading replacement would remove child sections. To replace the whole subtree, set allowSubtreeReplacement: true with a fresh ifMatch. To edit one body block, use within instead.");
+      "Heading replacement would remove child sections. To replace the whole subtree, set allowSubtreeReplacement: true with a fresh ifMatch or ifMatchGuard. To edit one body block, use within instead.");
   }
 }
 

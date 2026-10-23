@@ -11,6 +11,7 @@ import {
   readVaultNote, searchVaultQuery, type ReadVaultDocumentOptions,
 } from "../../src/core/index.js";
 import { VaultDocumentTooLargeError } from "../../src/core/file/read-vault-document.js";
+import { getVersionGuard } from "../../src/core/version/content-version.js";
 import {
   createVaultMcpServer, type VaultMcpServerDependencies, type VaultMcpServerOptions,
 } from "../../src/transport/mcp/server.js";
@@ -196,7 +197,7 @@ test("whole-file text reads separate every metadata field from the unmodified bo
     assert.equal(Object.hasOwn(actual.metadata, "content"), false);
     assert.equal(actual.body, body);
     assert.equal(actual.metadata["version"], computeContentVersion(Buffer.from(body, "utf8")));
-    assert.deepEqual(Object.keys(actual.metadata).sort(), ["frontmatter", "path", "stat", "tags", "textField", "version"]);
+    assert.deepEqual(Object.keys(actual.metadata).sort(), ["frontmatter", "path", "stat", "tags", "textField", "version", "versionGuard"]);
     assert.equal((actual.metadata["stat"] as { size: number }).size, Buffer.byteLength(body, "utf8"));
   }
 });
@@ -212,10 +213,10 @@ test("heading and block text reads split textual targets while every frontmatter
     const standard = await f.standard.client.callTool({ name: "vault_read", arguments: args });
     const text = await f.compatibility.client.callTool({ name: "vault_read_text", arguments: args });
     assert.notEqual(standard.isError, true, JSON.stringify(standard));
-    const expected = standard.structuredContent as { path: string; version: string; result: string };
+    const expected = standard.structuredContent as { path: string; version: string; versionGuard: string; result: string };
     assert.equal(typeof expected.result, "string");
     assert.deepEqual(rawTextPayload(text), {
-      metadata: { path: expected.path, version: expected.version, textField: "result" }, body: expected.result,
+      metadata: { path: expected.path, version: expected.version, versionGuard: expected.versionGuard, textField: "result" }, body: expected.result,
     });
   }
   const typedPath = "属性.md";
@@ -231,7 +232,8 @@ test("heading and block text reads split textual targets while every frontmatter
     assert.notEqual(text.isError, true, JSON.stringify(text));
     const actual = textPayload(text);
     assert.deepEqual(actual, standard.structuredContent);
-    assert.deepEqual(actual, { path: typedPath, version: computeContentVersion(Buffer.from(typedSource, "utf8")), result: expected });
+    assert.deepEqual(actual, { path: typedPath, version: computeContentVersion(Buffer.from(typedSource, "utf8")),
+      versionGuard: getVersionGuard(computeContentVersion(Buffer.from(typedSource, "utf8"))), result: expected });
   }
 });
 
@@ -371,7 +373,7 @@ test("text list and document map preserve Chinese paths, emoji, literal escapes 
   const canonical = await f.standard.client.callTool({ name: "vault_get_document_map", arguments: { path: notePath } });
   const text = await f.compatibility.client.callTool({ name: "vault_get_document_map_text", arguments: { path: notePath } });
   assert.notEqual(text.isError, true, JSON.stringify(text));
-  const map = textPayload(text) as { path: string; version: string; headings: Record<string, Record<string, unknown>>;
+  const map = textPayload(text) as { path: string; version: string; versionGuard: string; headings: Record<string, Record<string, unknown>>;
     blocks: string[]; frontmatterFields: string[] };
   // In-memory transport retains the core heading tree's null prototype; JSON wire results do not.
   assert.deepEqual(map, JSON.parse(JSON.stringify(canonical.structuredContent)) as unknown);
@@ -391,7 +393,7 @@ test("text list and document map preserve Chinese paths, emoji, literal escapes 
   } });
   assert.notEqual(targeted.isError, true, JSON.stringify(targeted));
   assert.deepEqual(rawTextPayload(targeted), {
-    metadata: { path: notePath, version: map.version, textField: "result" }, body: "第二处 🌫️\r\n",
+    metadata: { path: notePath, version: map.version, versionGuard: map.versionGuard, textField: "result" }, body: "第二处 🌫️\r\n",
   });
   const block = text.content[0];
   assert.ok(block?.type === "text" && block.text.includes(heading));
@@ -408,7 +410,7 @@ test("text search preserves non-boolean JSON values and exact-byte source versio
     assert.notEqual(text.isError, true, JSON.stringify(text));
     assert.deepEqual(textPayload(text), canonical.structuredContent);
     assert.deepEqual(textPayload(text), { results: [{ filename: notePath, result: expected,
-      version: computeContentVersion(Buffer.from(source, "utf8")) }] });
+      version: computeContentVersion(Buffer.from(source, "utf8")), versionGuard: getVersionGuard(computeContentVersion(Buffer.from(source, "utf8"))) }] });
     if (field === "标题") {
       const block = text.content[0];
       assert.ok(block?.type === "text" && block.text.includes("中文 🌱"));

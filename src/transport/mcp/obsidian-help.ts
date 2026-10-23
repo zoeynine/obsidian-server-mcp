@@ -80,7 +80,7 @@ function presentation(canonical: string, alias: boolean, options: ObsidianHelpOp
 const textReadPresentation = [
   'In the text profile, whole-file reads return two text blocks: metadata JSON with textField: "content", then the original content string.',
   'Heading/block reads use textField: "result", then the unchanged semantic reader text.',
-  "Frontmatter targets retain single-block {path,version,result} JSON for every value type, including strings.",
+  "Frontmatter targets retain single-block {path,version,versionGuard,result} JSON for every value type, including strings.",
   "Empty bodies retain the second block. There is no trimming, escaping, newline conversion or code fence.",
   "No outputSchema or structuredContent is exposed; successful output is still validated internally.",
   "Core heading normalization still applies. Business errors retain isError: true and one JSON text block with unchanged codes.",

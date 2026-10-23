@@ -5,13 +5,14 @@ import { DEFAULT_MAX_DOCUMENT_MAP_HEADINGS, MAX_DOCUMENT_MAP_HEADINGS,
   type DocumentMapLimitOptions } from "./document-map-limits.js";
 import { buildVaultMarkdownModel } from "../parser/structured-markdown.js";
 import { withoutBom } from "./note-json.js";
-import type { ContentVersion } from "../version/content-version.js";
+import type { ContentVersion, VersionGuard } from "../version/content-version.js";
 
 export interface GetVaultDocumentMapOptions extends ReadVaultDocumentOptions, DocumentMapLimitOptions {}
 export type VaultDocumentReader = (path: string, options?: ReadVaultDocumentOptions) => Promise<VaultDocumentReadResult>;
 export interface VaultDocumentMapResult {
   readonly path: string;
   readonly version: ContentVersion;
+  readonly versionGuard: VersionGuard;
   readonly headings: HeadingTree;
   readonly blocks: readonly string[];
   readonly frontmatterFields: readonly string[];
@@ -30,5 +31,6 @@ export async function getVaultDocumentMap(reader: VaultDocumentReader, path: str
     pending.push(...node.children);
   }
   const map = projectMap(model);
-  return { path: document.path, version: document.version, headings: map.headings, blocks: map.blocks, frontmatterFields: map.frontmatterFields };
+  return { path: document.path, version: document.version, versionGuard: document.versionGuard,
+    headings: map.headings, blocks: map.blocks, frontmatterFields: map.frontmatterFields };
 }

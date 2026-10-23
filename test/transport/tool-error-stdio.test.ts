@@ -5,7 +5,7 @@ import test from "node:test";
 import { Client, type JsonSchemaType } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/client/validators/ajv";
-import { computeContentVersion } from "../../src/core/version/content-version.js";
+import { computeContentVersion, getVersionGuard } from "../../src/core/version/content-version.js";
 import { readToolError } from "./tool-error.js";
 
 test("stdio wire errors omit structuredContent while mutation success still matches its declared schema", async t => {
@@ -25,7 +25,7 @@ test("stdio wire errors omit structuredContent while mutation success still matc
   const required = append.outputSchema["required"];
   assert.ok(Array.isArray(required));
   assert.deepEqual([...required].sort(),
-    ["beforeSizeBytes", "created", "message", "path", "sizeBytes", "version"]);
+    ["beforeSizeBytes", "created", "message", "path", "sizeBytes", "version", "versionGuard"]);
   assert.equal(append.outputSchema["additionalProperties"], false);
   // tools/list supplied JSON; the SDK wire type's optional undefined values cannot occur here.
   const validateReceipt = new AjvJsonSchemaValidator().getValidator(append.outputSchema as JsonSchemaType);
@@ -88,7 +88,7 @@ test("stdio wire errors omit structuredContent while mutation success still matc
   assert.equal(Object.hasOwn(successful, "structuredContent"), true);
   assert.deepEqual(successful.content, []);
   const expected = source + "\nnext";
-  assert.deepEqual(successful.structuredContent, { message: "OK", path: "note.md", version: computeContentVersion(expected),
+  assert.deepEqual(successful.structuredContent, { message: "OK", path: "note.md", version: computeContentVersion(expected), versionGuard: getVersionGuard(computeContentVersion(expected)),
     beforeSizeBytes: Buffer.byteLength(source), sizeBytes: Buffer.byteLength(expected), created: false });
   const validation = validateReceipt(successful.structuredContent);
   assert.equal(validation.valid, true, validation.errorMessage);

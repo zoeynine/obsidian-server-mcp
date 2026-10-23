@@ -10,7 +10,7 @@
 - 不维护第二套搜索数据库或链接图；
 - 不在 MCP 内复制一套部署权限系统；
 - 读写使用 Vault-relative path、路径/符号链接保护与精确版本检查；
-- mutation 对已有文件使用 `version / ifMatch`，避免在内容已经变化时静默覆盖；
+- mutation 对已有文件使用 `version / ifMatch`，或便于回填的 `versionGuard / ifMatchGuard`，在发现内容变化时明确拒绝；
 - Linux headless/VPS 是正式支持目标；Windows 仅用于本地开发。
 
 完整 contract、边界和所有细节以 [英文 README](README.md) 为准。这份中文页只做快速导览。
@@ -99,8 +99,8 @@ vault_read({"path":"Hello.md"})
 - stdio 核心本身不提供远程认证、同步或公网 transport；这些属于外部 deployment adapter。
 - MCP 不伪造 Obsidian Desktop 的 link graph。需要引用关系时使用有界的 `reference_query`。
 - 真正的读 / 写 / 删除权限由部署环境的 user / group / ACL / mount / container 权限决定。
-- 修改已有文件前应先取得最新 `version` 并作为 `ifMatch` 提交；冲突后重新读取和判断，不自动重试 mutation。
-- `vault_replace_text` 只接受 `path`、`oldText`、`newText`、`ifMatch` 四个必填字段。旧字符串必须非空且在整个文件中精确、区分大小写地唯一命中（重叠命中也计数）；新字符串为空表示删除，相同则拒绝。请从整文件 `vault_read` 返回的 `content` 原样截取旧文本，并使用同次读取的 `version`，不要把归一化后的 heading 读取结果当作原文。
+- 修改已有文件前取得最新 `versionGuard`，原样作为 `ifMatchGuard` 提交；也可继续将完整 `version` 作为 `ifMatch`，两者不能同传。短 guard 固定为 16 位小写十六进制，取自同次原始字节 SHA-256 的前 64 bit；无需客户端截取，也没有会话、缓存或租约。它有低概率碰撞，不等价于完整 SHA-256 的碰撞强度；需要更强保护时使用完整 `ifMatch`。首次匹配后，操作内部仍以完整版本复核。冲突后重新读取和判断，不自动重试 mutation。
+- `vault_replace_text` 接受 `path`、`oldText`、`newText`，以及 `ifMatch`／`ifMatchGuard` 二选一。旧字符串必须非空且在整个文件中精确、区分大小写地唯一命中（重叠命中也计数）；新字符串为空表示删除，相同则拒绝。请从整文件 `vault_read` 返回的 `content` 原样截取旧文本，并使用同次读取的版本或 guard，不要把归一化后的 heading 读取结果当作原文。
 - 精确替换不经过 Markdown parser，但整文件 `vault_read` 仍会解析 frontmatter；它不构成坏 YAML 的恢复流程。两个替换字符串的 UTF-8 字节总量上限为 4 MiB，旧、新文件另受 store 文本预算约束；不做换行、BOM 或 Unicode 归一化，不提供范围、序号、全部替换、正则、模糊匹配或批处理选项。
 - 写入、追加、patch 和精确替换的回执含 `beforeSizeBytes` 与写后 `sizeBytes`，用 `created` 区分原本缺失和空文件；精确替换再返回 `replacementCount: 1`。这些回执不保证结构或编辑意图正确，必要时仍应检查保存后的内容或 document map。
 
