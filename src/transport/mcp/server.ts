@@ -24,7 +24,7 @@ import { mapObsidianHelpError, readObsidianHelp } from "./obsidian-help.js";
 import { REFERENCE_QUERY_TOOL_NAME, registerReferenceQuery, type ReferenceQueryUseCase } from "./reference-query.js";
 
 export const MCP_SERVER_NAME = "obsidian-server-mcp";
-export const MCP_SERVER_VERSION = "0.1.0";
+export const MCP_SERVER_VERSION = "0.2.0";
 export const OBSIDIAN_HELP_TOOL_NAME = "obsidian_help";
 export const SEARCH_QUERY_TOOL_NAME = "search_query";
 export const SEARCH_QUERY_TEXT_TOOL_NAME = "search_query_text";

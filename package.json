@@ -1,6 +1,6 @@
 {
   "name": "obsidian-server-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "license": "MIT",
   "description": "A thin server-side MCP for controlled operations on an Obsidian Vault.",
