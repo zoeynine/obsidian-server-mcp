@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Heading reads accept a bare string as a unique raw heading label anywhere in
+  the document. Arrays and JSON-encoded string arrays retain exact full-path
+  addressing. Ambiguous labels fail with bounded canonical candidate paths;
+  this does not add wikilink or slug resolution or change mutation targets.
+- Add `vault_insert_heading` to insert a section and its subtree at an exact
+  parent and first/last/before/after placement. Body headings are relative to
+  the new section; the server computes their levels, supports single-line
+  setext conversion, and rejects H6 overflow, duplicate siblings, unsupported
+  labels, and changes to existing section ownership. It uses the existing
+  version preconditions and atomic mutation path. Full standard and text
+  compositions now expose 15 tools, or 16 with legacy `enableTextRead`.
+
 ## 0.2.0 - 2026-10-24
 
 ### Added

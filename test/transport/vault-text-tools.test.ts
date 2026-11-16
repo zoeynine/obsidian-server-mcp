@@ -116,20 +116,20 @@ function assertSafeResult(result: ToolResult, root: string): void {
   assert.doesNotMatch(serialized, /stack/u);
 }
 
-test("two servers share complete dependencies while exposing distinct fourteen-tool surfaces", async t => {
+test("two servers share complete dependencies while exposing distinct fifteen-tool surfaces", async t => {
   const f = await fixture(t);
   const baseline = (await f.standard.client.listTools()).tools;
   const enabled = (await f.compatibility.client.listTools()).tools;
   assert.deepEqual(baseline.map(tool => tool.name).sort(), [
     "obsidian_help", "reference_query", "search_query", "tag_list", "vault_append", "vault_delete",
-    "vault_get_document_map", "vault_list", "vault_move", "vault_patch", "vault_read", "vault_read_binary",
+    "vault_get_document_map", "vault_insert_heading", "vault_list", "vault_move", "vault_patch", "vault_read", "vault_read_binary",
     "vault_replace_text", "vault_write",
   ]);
-  assert.equal(enabled.length, 14);
-  assert.equal(new Set(baseline.map(tool => tool.name)).size, 14);
-  assert.equal(new Set(enabled.map(tool => tool.name)).size, 14);
+  assert.equal(enabled.length, 15);
+  assert.equal(new Set(baseline.map(tool => tool.name)).size, 15);
+  assert.equal(new Set(enabled.map(tool => tool.name)).size, 15);
   const shared = baseline.filter(tool => !structuredNames.has(tool.name));
-  assert.equal(shared.length, 10);
+  assert.equal(shared.length, 11);
   const expectedShared = shared.map(tool => {
     const { outputSchema: _outputSchema, ...textTool } = tool;
     assert.ok(_outputSchema);
@@ -166,12 +166,12 @@ test("legacy text-read opt-in remains compatible and cannot duplicate the text-p
   const baseline = (await f.standard.client.listTools()).tools;
   const legacyTools = (await legacy.client.listTools()).tools;
   const textToolsWithLegacyFlag = (await textLegacy.client.listTools()).tools;
-  assert.equal(legacyTools.length, 15);
-  assert.equal(new Set(legacyTools.map(tool => tool.name)).size, 15);
+  assert.equal(legacyTools.length, 16);
+  assert.equal(new Set(legacyTools.map(tool => tool.name)).size, 16);
   assert.deepEqual(legacyTools.filter(tool => tool.name !== "vault_read_text"), baseline);
   assert.deepEqual(legacyTools.filter(tool => textNames.has(tool.name)).map(tool => tool.name), ["vault_read_text"]);
-  assert.equal(textToolsWithLegacyFlag.length, 14);
-  assert.equal(new Set(textToolsWithLegacyFlag.map(tool => tool.name)).size, 14);
+  assert.equal(textToolsWithLegacyFlag.length, 15);
+  assert.equal(new Set(textToolsWithLegacyFlag.map(tool => tool.name)).size, 15);
   assert.deepEqual(textToolsWithLegacyFlag, (await f.compatibility.client.listTools()).tools);
 });
 
@@ -456,7 +456,7 @@ test("text-profile help, tags and references return compact JSON with the standa
   }
 });
 
-test("all six mutation receipts use compact text JSON while standard receipts retain structured content", async t => {
+test("all seven mutation receipts use compact text JSON while standard receipts retain structured content", async t => {
   const standardFixture = await fixture(t);
   const textFixture = await fixture(t);
   const mutationPath = "操作目录/新建 🌱.md";
@@ -481,10 +481,12 @@ test("all six mutation receipts use compact text JSON while standard receipts re
   const replaced = await execute("vault_replace_text", { path: mutationPath, oldText: "原文 🌫️", newText: '新文 "🌱"',
     ifMatch: patched["version"] });
   assert.equal(replaced["replacementCount"], 1);
-  const moved = await execute("vault_move", { path: mutationPath, destination: movedPath, ifMatch: replaced["version"] });
+  const inserted = await execute("vault_insert_heading", { path: mutationPath, parent: ["段落"], place: "last",
+    title: "新增小节", body: "结构化新增 🌱", ifMatch: replaced["version"] });
+  const moved = await execute("vault_move", { path: mutationPath, destination: movedPath, ifMatch: inserted["version"] });
   assert.deepEqual(moved, { message: "OK", oldPath: mutationPath, newPath: movedPath });
   assert.equal((await readFile(path.join(textFixture.vault, movedPath), "utf8")).includes('新文 "🌱"'), true);
-  const deleted = await execute("vault_delete", { path: movedPath, permanent: true, ifMatch: replaced["version"] });
+  const deleted = await execute("vault_delete", { path: movedPath, permanent: true, ifMatch: inserted["version"] });
   assert.deepEqual(deleted, { message: "OK", path: movedPath, permanent: true });
   await assert.rejects(readFile(path.join(textFixture.vault, movedPath)), { code: "ENOENT" });
 });
@@ -725,7 +727,7 @@ test("closing either surface leaves the other surface and its shared dependencie
       const f = await fixture(child);
       const remaining = closing === "standard" ? f.compatibility : f.standard;
       await f[closing].close();
-      assert.equal((await remaining.client.listTools()).tools.length, 14);
+      assert.equal((await remaining.client.listTools()).tools.length, 15);
       const result = await remaining.client.callTool({ name: closing === "standard" ? "vault_read_text" : "vault_read",
         arguments: { path: notePath } });
       assert.notEqual(result.isError, true);

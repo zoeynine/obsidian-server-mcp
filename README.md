@@ -83,7 +83,7 @@ terminal's PATH, use the absolute Node executable as `command` (find it with
 Clients with form-based settings use the same command, argument and environment
 variable. Launch `node` directly so the MCP protocol has exclusive use of stdout.
 
-Reconnect the client and discover **14 tools**. First call
+Reconnect the client and discover **15 tools**. First call
 `obsidian_help({"topic":"read"})`, then `vault_list({"path":""})` and
 `vault_read({"path":"Hello.md"})` against the example Vault. A write-capable
 client can modify files with this server; choose its Vault and filesystem
@@ -126,7 +126,7 @@ filesystem paths or stacks.
 | --- | --- |
 | `obsidian_help` | Topic index when `topic` is omitted; only the requested usage section otherwise |
 | `vault_list` | Sorted `{files}` with directory suffixes; omit `path` or use `""` for the Vault root |
-| `vault_read` | Whole file or selected heading/block/frontmatter value, with exact-byte version; discover targets with `vault_get_document_map` |
+| `vault_read` | Whole file or selected heading/block/frontmatter value, with exact-byte version; exact heading path or unique label shorthand |
 | `vault_read_binary` | Image preview, signed download link or explicit bytes for non-PDF attachments; PDF is unsupported; see `obsidian_help` topic `binary` |
 | `vault_get_document_map` | Nested heading addresses, block IDs and frontmatter keys, including duplicate disambiguators |
 | `search_query` | JsonLogic over note text, paths and properties, retaining truthy values in `{results}` within scan/result limits |
@@ -135,6 +135,7 @@ filesystem paths or stacks.
 | `vault_write` | Atomic text create/replace; existing files require `ifMatch` or `ifMatchGuard` |
 | `vault_append` | Atomic append; existing files require `ifMatch` or `ifMatchGuard`; missing LF added first as in Local REST |
 | `vault_patch` | Generic heading/block/frontmatter instruction; requires `ifMatch` or `ifMatchGuard` |
+| `vault_insert_heading` | Insert a heading subtree under an exact parent at a structured position; calculates depth and rejects changes to existing structure |
 | `vault_replace_text` | Atomic literal replacement of one unique exact string in an existing text file; requires `ifMatch` or `ifMatchGuard` |
 | `vault_move` | Move a file; destination suffix and optional `allowOverwrite` follow Local REST |
 | `vault_delete` | Recoverable Vault-local trash by default; `permanent: true` permanently deletes a file |
@@ -185,8 +186,8 @@ reads retain single-block `{path,version,versionGuard,result}` JSON for every va
 including strings. Heading/block reads retain their existing semantic behavior,
 including relative heading levels; use a whole-file read for exact replacement.
 
-A full composition has 14 tools in either profile. The text profile replaces
-the four original names rather than adding duplicate choices. The other ten
+A full composition has 15 tools in either profile. The text profile replaces
+the four original names rather than adding duplicate choices. The other eleven
 names and all operation semantics are shared. The standard profile's output
 formats remain unchanged; the standard stdio entry uses that default profile.
 Every client discovering an endpoint sees that endpoint's selected tool list.
@@ -215,7 +216,7 @@ Help and recovery instructions refer to the selected profile's available tool
 names; stable error codes are unchanged.
 
 For existing hosts, `enableTextRead: true` remains supported: with the default
-profile it adds only `vault_read_text`, giving a full composition 15 tools, and
+profile it adds only `vault_read_text`, giving a full composition 16 tools, and
 retains the original single-block JSON reading contract.
 The text profile already includes that tool and never registers it twice.
 
@@ -244,6 +245,10 @@ bundled strings, so a deployed package needs neither Markdown source file.
 Start with `vault_list` to discover paths. For a known note, use
 `vault_get_document_map` when you need reliable heading paths, block IDs or
 property names, then copy its keys unchanged to a targeted `vault_read`.
+For a known heading label, `targetType: "heading", target: "Setup"` reads it
+directly when that exact label is unique in the document. Arrays remain exact
+full paths: `["Setup"]` names a top-level heading, not a shorthand. Ambiguous
+labels fail with candidate full paths; choose one explicitly or consult the map.
 Use a whole-file read for full context or an exact source slice for replacement.
 Targeted heading levels are relative; inspect the whole file or map to verify
 stored nesting after a structural change.
@@ -348,6 +353,15 @@ the whole section or a move of its parent relationship have different effects.
 `within: 0` selects the first direct body block when child sections should be
 retained; choose the appropriate index for another body block.
 
+To add a heading subtree, use `vault_insert_heading` with an exact `parent`, `place`,
+`title` and `body`. It calculates the new level and validates placement before
+publishing. Body headings are relative: `#` becomes a child of the new heading,
+`##` a grandchild. Only true heading markers are re-levelled; ordinary body text,
+including code and HTML, stays literal. Single-line setext headings become ATX;
+unrepresentable labels fail explicitly. H6 overflow, duplicate siblings and insertions that
+would absorb or reparent existing content fail without writing. See its tool
+topic for root placement, before/after anchors and boundary recovery.
+
 Heading content uses relative levels. In the default `content` scope, input
 `#` becomes a child of the selected heading. With `markerAndContent`
 prepend/append it is relative to the target's actual parent; skipped levels
@@ -374,6 +388,7 @@ Choose the operation that matches the intended change:
 - `vault_append`: add literal text at the end, creating a missing file.
 - `vault_replace_text`: replace one unique literal slice from a whole-file read.
 - `vault_patch`: edit a semantic heading, body block or typed property.
+- `vault_insert_heading`: add a heading and its subtree at a structured position.
 
 For an existing file, read with `vault_read` or `vault_get_document_map` and
 copy the returned `versionGuard` unchanged into `ifMatchGuard`. Alternatively,

@@ -9,6 +9,7 @@ import { readVaultDocument, VaultDocumentNotFoundError, DEFAULT_MAX_VAULT_DOCUME
 import { assertTextContent, assertTextPath } from "../file/text-policy.js";
 import { VaultPathSandbox, type VaultRelativePath } from "../path/vault-path.js";
 import { MAX_PATCH_INPUT_BYTES, prepareVaultPatch } from "../patch/prepare-vault-patch.js";
+import { MAX_HEADING_INSERT_INPUT_BYTES, prepareHeadingInsertion } from "../patch/prepare-heading-insertion.js";
 import { assertVersionMatch, assertVersionPrecondition, computeContentVersion, getVersionGuard, parseVersionPrecondition,
   type ContentVersion, type VersionGuard, type VersionPrecondition, type VersionPreconditionInput } from "../version/content-version.js";
 import { nativeMutationIO, type MutationIO } from "./mutation-io.js";
@@ -113,6 +114,22 @@ export class VaultMutationStore {
       warnings: [],
     }));
     return { ...result, replacementCount: 1 };
+  }
+  async insertHeading(inputPath: string, instruction: unknown): Promise<VaultMutationResult> {
+    requireJson(instruction);
+    // Capture structured placement and the precondition before the path lock.
+    const serialized = JSON.stringify(instruction);
+    if (Buffer.byteLength(serialized, "utf8") > MAX_HEADING_INSERT_INPUT_BYTES) {
+      throw new VaultMutationError("too_large", "Heading insertion input exceeds 4 MiB", { path: inputPath });
+    }
+    const captured: unknown = JSON.parse(serialized);
+    const precondition = captured && typeof captured === "object"
+      ? parseVersionPrecondition(captured as VersionPreconditionInput) : undefined;
+    if (!precondition) throw new VaultMutationError("if_match_required", "vault_insert_heading requires ifMatch or ifMatchGuard", { path: inputPath });
+    return this.#mutate(inputPath, precondition, true, previous => {
+      const prepared = prepareHeadingInsertion(previous!, captured);
+      return { content: prepared.document, warnings: prepared.warnings };
+    });
   }
   #validateText(inputPath: string, content: string): void {
     this.#sandbox.parse(inputPath);

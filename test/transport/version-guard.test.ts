@@ -22,6 +22,7 @@ const mutations = [
   ["vault_append", { content: "next" }],
   ["vault_patch", { targetType: "frontmatter", target: "status", operation: "replace", value: "done" }],
   ["vault_replace_text", { oldText: "old", newText: "new" }],
+  ["vault_insert_heading", { parent: ["Heading"], place: "last", title: "Child", body: "new section" }],
   ["vault_move", { destination: "moved.md" }],
   ["vault_delete", { permanent: true }],
 ] as const;
@@ -71,7 +72,7 @@ function assertGuard(value: Record<string, unknown>, expectedVersion = version):
   assert.match(String(value["versionGuard"]), /^[0-9a-f]{16}$/u);
 }
 
-test("all six mutation tools accept short guards with identical standard and text receipts", async t => {
+test("all seven mutation tools accept short guards with identical standard and text receipts", async t => {
   const f = await fixture(t);
   for (const [name, args] of mutations) {
     const receipts: Record<string, unknown>[] = [];
@@ -151,7 +152,7 @@ test("wire schemas keep fixed lowercase guard length and complete legacy version
         assert.equal(result.isError, true);
         assert.match(JSON.stringify(result.content), /Input validation error/u);
       }
-      if (name === "vault_patch" || name === "vault_replace_text") {
+      if (name === "vault_patch" || name === "vault_replace_text" || name === "vault_insert_heading") {
         const result = await endpoint.client.callTool({ name, arguments: { path: "note.md", ...args } });
         assert.equal(result.isError, true);
         assert.match(JSON.stringify(result.content), /Input validation error/u);

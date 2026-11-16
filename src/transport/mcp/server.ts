@@ -38,6 +38,7 @@ export const VAULT_READ_TEXT_TOOL_NAME = "vault_read_text";
 export const VAULT_WRITE_TOOL_NAME = "vault_write";
 export const VAULT_APPEND_TOOL_NAME = "vault_append";
 export const VAULT_PATCH_TOOL_NAME = "vault_patch";
+export const VAULT_INSERT_HEADING_TOOL_NAME = "vault_insert_heading";
 export const VAULT_REPLACE_TEXT_TOOL_NAME = "vault_replace_text";
 export const VAULT_MOVE_TOOL_NAME = "vault_move";
 export const VAULT_DELETE_TOOL_NAME = "vault_delete";
@@ -67,7 +68,7 @@ const readOutput = z.union([
 const readInput = z.object({ path: z.string(), maxBytes,
   targetType: z.enum(["heading", "block", "frontmatter"]).optional(),
   target: z.union([z.array(z.string()), z.string()]).optional()
-    .describe('Pair with targetType. Heading: full map path, e.g. ["Root","Child"]; block: ID without ^; property: key.'),
+    .describe('Pair with targetType. Heading: exact full map path array, or a unique heading label as string; block: ID without ^; property: key.'),
   scope: z.enum(["content", "marker", "markerAndContent"]).optional()
     .describe("Requires a target; defaults to content.") }).strict();
 
@@ -101,7 +102,8 @@ function semanticError(error: unknown, targetType?: unknown, textProfile = false
   const message = error instanceof TargetNotFoundError && targetType === "heading"
     ? `Heading target or body block not found. Use the full heading path from the top level, e.g. ["Guide","Setup"], copying exact keys from ${textProfile ? VAULT_GET_DOCUMENT_MAP_TEXT_TOOL_NAME : VAULT_GET_DOCUMENT_MAP_TOOL_NAME}. If within is set, also check its body-block index.`
     : error instanceof EngineError ? "Markdown operation failed: " + error.name : error.message;
-  const payload = { error: { code: "vault_semantic." + code, message } };
+  const payload = { error: { code: "vault_semantic." + code, message,
+    ...(error instanceof VaultSemanticError && error.details !== undefined ? { details: error.details } : {}) } };
   return { content: [{ type: "text", text: JSON.stringify(payload) }], isError: true };
 }
 
@@ -156,13 +158,13 @@ export function createVaultMcpServer(dependencies: VaultMcpServerDependencies, o
   const runRead = ({path, ...readOptions}: z.infer<typeof readInput>) =>
     dependencies.readDocument(path, defined(readOptions) as ReadVaultNoteOptions);
   if (!textProfile) {
-    register(VAULT_READ_TOOL_NAME, "Read a Vault text file or target with version and versionGuard. Discover targets via vault_get_document_map; targeted heading levels are relative. No link graph.",
+    register(VAULT_READ_TOOL_NAME, "Read a Vault text file or target with version and versionGuard. Heading arrays are exact vault_get_document_map paths; a string label must be unique in the document. Targeted heading levels are relative. No link graph.",
       readInput, readOutput, runRead, mapVaultReadToolError);
   }
   if (textProfile || options.enableTextRead === true) {
     register(VAULT_READ_TEXT_TOOL_NAME, textProfile
-      ? "Read a Vault text file or target. Full-file and heading/block reads return two text blocks: metadata JSON with textField naming content/result, then the unchanged reader text. Frontmatter values remain single-block typed JSON. Same read limits; copy version as ifMatch or versionGuard as ifMatchGuard. Discover targets via vault_get_document_map_text; targeted heading levels are relative, so copy exact replacement text from a full-file read."
-      : `Read a Vault text file or target as text-only JSON. Same inputs, read limits, version and versionGuard as vault_read. Discover targets via ${VAULT_GET_DOCUMENT_MAP_TOOL_NAME}; targeted heading levels are relative.`,
+      ? "Read a Vault text file or target. Full-file and heading/block reads return two text blocks: metadata JSON with textField naming content/result, then unchanged reader text. Frontmatter stays typed JSON. Heading arrays are exact vault_get_document_map_text paths; a string label must be unique. Same limits and versions. Targeted heading levels are relative; copy replacement text from a full-file read."
+      : "Read a Vault text file or target as text-only JSON. Same inputs, limits and versions as vault_read. Heading arrays are exact vault_get_document_map paths; a string label must be unique. Targeted heading levels are relative.",
       readInput, readOutput, runRead, mapVaultReadToolError, undefined, true,
       textProfile ? (result, args) => presentReadText(result as z.infer<typeof readOutput>, args.targetType) : undefined);
   }
@@ -223,6 +225,14 @@ export function createVaultMcpServer(dependencies: VaultMcpServerDependencies, o
       ({ path, oldText, newText, ...preconditions }) => mutations.replaceText(path, oldText, newText, defined(preconditions)),
       (error, args) => mapVaultMutationToolError(error, args.path), { destructive: true, idempotent: false });
     const headingAddress = z.array(z.string()).nullable();
+    const siblingAddress = z.array(z.string()).min(1);
+    register(VAULT_INSERT_HEADING_TOOL_NAME, "Insert a heading subtree under an exact parent at first/last or before/after a direct child. Server sets its level; body # is its child, ## its grandchild. Only true heading markers are re-levelled. Rejects H6 overflow, duplicate siblings and changes to existing structure. Requires ifMatch or ifMatchGuard; no retry.",
+      z.object({ path: z.string(), parent: headingAddress.describe("Exact full map path; null or [] is the document root."),
+        place: z.union([z.enum(["first", "last"]), z.object({ before: siblingAddress }).strict(), z.object({ after: siblingAddress }).strict()]),
+        title: z.string().min(1).max(MAX_VAULT_DOCUMENT_BYTES), body: z.string().max(MAX_VAULT_DOCUMENT_BYTES),
+        ...mutationPreconditions }).strict().refine(hasMutationPrecondition, { message: "Requires ifMatch or ifMatchGuard" }),
+      mutationOutput, ({ path, ...instruction }) => mutations.insertHeading(path, defined(instruction)),
+      (error, args) => mapVaultMutationToolError(error, args.path), { destructive: false, idempotent: false });
     register(VAULT_PATCH_TOOL_NAME, "Patch a heading/block/property with ifMatch or ifMatchGuard (copy versionGuard) from a read/map. Copy map keys unchanged. Heading content without within: # is one level below the target for content (default), or the target's actual parent for markerAndContent prepend/append. No automatic retry.",
       z.object({ path: z.string(), targetType: z.enum(["heading", "block", "frontmatter"]),
         target: z.union([headingAddress, z.string()]), within: z.number().int().optional(),

@@ -26,7 +26,7 @@ const aliases = [
 ] as const;
 const canonicalTools = [
   "obsidian_help", "reference_query", "search_query", "tag_list", "vault_append", "vault_delete",
-  "vault_get_document_map", "vault_list", "vault_move", "vault_patch", "vault_read", "vault_read_binary",
+  "vault_get_document_map", "vault_insert_heading", "vault_list", "vault_move", "vault_patch", "vault_read", "vault_read_binary",
   "vault_replace_text", "vault_write",
 ];
 const profiles: readonly VaultMcpServerOptions[] = [{}, { toolProfile: "text" }, { enableTextRead: true }];
@@ -40,11 +40,11 @@ test("help index lists the exact registered tools for dependency compositions an
     { options: {}, composition: {}, count: 6 },
     { options: {}, composition: { binary: true }, count: 7 },
     { options: {}, composition: { references: true }, count: 7 },
-    { options: {}, composition: { mutations: true }, count: 12 },
-    { options: {}, composition: full, count: 14 },
-    { options: { toolProfile: "text" }, composition: full, count: 14 },
-    { options: { enableTextRead: true }, composition: full, count: 15 },
-    { options: { toolProfile: "text", enableTextRead: true }, composition: full, count: 14 },
+    { options: {}, composition: { mutations: true }, count: 13 },
+    { options: {}, composition: full, count: 15 },
+    { options: { toolProfile: "text" }, composition: full, count: 15 },
+    { options: { enableTextRead: true }, composition: full, count: 16 },
+    { options: { toolProfile: "text", enableTextRead: true }, composition: full, count: 15 },
   ];
   for (const { options, composition, count } of cases) {
     await t.test(`${JSON.stringify(options)} ${JSON.stringify(composition)}`, async child => {
@@ -393,7 +393,7 @@ async function createHelpClient(t: TestContext, options: VaultMcpServerOptions =
     ...(composition.binary ? { readBinary: unexpected } : {}),
     ...(composition.references ? { referenceQuery: unexpected } : {}),
     ...(composition.mutations ? { mutations: {
-      write: unexpected, append: unexpected, patch: unexpected, replaceText: unexpected,
+      write: unexpected, append: unexpected, patch: unexpected, replaceText: unexpected, insertHeading: unexpected,
       move: unexpected, delete: unexpected,
     } as unknown as VaultMutationStore } : {}),
   };

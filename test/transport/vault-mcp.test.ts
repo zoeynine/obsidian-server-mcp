@@ -34,6 +34,7 @@ import {
   VAULT_WRITE_TOOL_NAME,
   VAULT_APPEND_TOOL_NAME,
   VAULT_PATCH_TOOL_NAME,
+  VAULT_INSERT_HEADING_TOOL_NAME,
   VAULT_REPLACE_TEXT_TOOL_NAME,
   VAULT_MOVE_TOOL_NAME,
   VAULT_DELETE_TOOL_NAME,
@@ -851,15 +852,15 @@ test("all discovered tools have input/output schemas and reject unknown input fi
   }
 });
 
-test("mutation capability exposes eleven Vault tools plus help with strict schemas and correct annotations", async t => {
+test("mutation capability exposes twelve Vault tools plus help with strict schemas and correct annotations", async t => {
   const harness = await createHarness(t, { enableMutations: true });
   const tools = (await harness.client.listTools()).tools;
-  assert.deepEqual(tools.map(t => t.name).sort(), ["obsidian_help", "search_query", "tag_list", "vault_append", "vault_delete", "vault_get_document_map", "vault_list", "vault_move", "vault_patch", "vault_read", "vault_replace_text", "vault_write"]);
-  for (const name of [VAULT_WRITE_TOOL_NAME, VAULT_APPEND_TOOL_NAME, VAULT_PATCH_TOOL_NAME, VAULT_REPLACE_TEXT_TOOL_NAME, VAULT_MOVE_TOOL_NAME, VAULT_DELETE_TOOL_NAME]) {
+  assert.deepEqual(tools.map(t => t.name).sort(), ["obsidian_help", "search_query", "tag_list", "vault_append", "vault_delete", "vault_get_document_map", "vault_insert_heading", "vault_list", "vault_move", "vault_patch", "vault_read", "vault_replace_text", "vault_write"]);
+  for (const name of [VAULT_WRITE_TOOL_NAME, VAULT_APPEND_TOOL_NAME, VAULT_PATCH_TOOL_NAME, VAULT_REPLACE_TEXT_TOOL_NAME, VAULT_INSERT_HEADING_TOOL_NAME, VAULT_MOVE_TOOL_NAME, VAULT_DELETE_TOOL_NAME]) {
     const tool = tools.find(t => t.name === name)!;
     assert.equal(tool.annotations?.readOnlyHint, false);
     assert.equal(tool.annotations?.idempotentHint, name === VAULT_WRITE_TOOL_NAME);
-    assert.equal(tool.annotations?.destructiveHint, name !== VAULT_APPEND_TOOL_NAME);
+    assert.equal(tool.annotations?.destructiveHint, name !== VAULT_APPEND_TOOL_NAME && name !== VAULT_INSERT_HEADING_TOOL_NAME);
     assert.equal(tool.inputSchema["additionalProperties"], false);
     assert.ok(tool.outputSchema);
   }

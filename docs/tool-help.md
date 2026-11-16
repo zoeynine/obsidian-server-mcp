@@ -108,13 +108,21 @@ the exact-byte SHA-256 `version` and its fixed 16-hex `versionGuard`.
 timestamps are informational; use `version` as `ifMatch` or copy `versionGuard`
 as `ifMatchGuard`, never both. See guide `write` for the short guard's limits.
 
-For a targeted read, supply `targetType` and `target` together. Heading targets
-are arrays containing the full ancestor path from the top level. Copy every key
-unchanged from the map, including duplicate-heading disambiguators. A
-JSON-encoded path-array string is accepted for clients that stringify this
-argument; a bare heading label is rejected. Block targets are bare IDs without
-`^`; frontmatter targets are property names. Optional `scope` requires a target
-and defaults to `content`:
+For a targeted read, supply `targetType` and `target` together. Heading arrays
+are exact full ancestor paths from the top level. Copy keys unchanged from the
+map, including duplicate disambiguators; even a one-element array stays exact.
+A bare string instead names a heading label that must be unique in the whole
+document, including top-level and repeated sibling headings. Labels match the
+parser's raw heading text exactly: no case folding, slug conversion, formatting
+removal or whitespace normalization.
+
+A valid JSON-encoded string-array retains its historical exact-path meaning.
+Thus `[]` and the string `"[]"` name the document root; to select a heading
+whose literal label looks like a JSON array, use its full path array. Other
+strings, including JSON literals, are matched as supplied. This shorthand is
+read-only; patch targets and insertion parents/anchors remain exact paths.
+Block targets are bare IDs without `^`; frontmatter targets are property names.
+Optional `scope` requires a target and defaults to `content`:
 
 | Target | `content` | `marker` | `markerAndContent` |
 | --- | --- | --- | --- |
@@ -138,9 +146,14 @@ a valid numeric input. No input coercion is applied.
 
 All reads enforce protected-path, symlink, text-extension, NUL and strict UTF-8
 checks. Original BOM and newlines are retained. Whole-file reads still parse
-frontmatter; malformed or unsupported YAML fails explicitly. A heading
-`vault_semantic.TargetNotFoundError` calls for checking the full exact map path,
-not dropping ancestor names. There is no Desktop link graph in this result.
+frontmatter; malformed or unsupported YAML fails explicitly. Zero heading
+matches return `vault_semantic.TargetNotFoundError`; check the spelling or map.
+`vault_semantic.ambiguous_heading` returns `error.details.candidates` as exact
+full path arrays, plus `total` and `truncated`. At most 16 candidates are shown;
+use the document map for the rest. Retry with a chosen array, preserving opaque
+duplicate keys. For example, when top-level and nested headings both say `A`,
+`"A"` is ambiguous while `["A"]` still selects the top-level one. There is no
+Desktop link graph or Obsidian URL/slug interpretation in this result.
 
 Read an existing `note.md`:
 
@@ -148,10 +161,11 @@ Read an existing `note.md`:
 {"path":"note.md"}
 ```
 
-Independently, for `## A` inside `# Root`, read its body:
+Independently, if `A` is unique anywhere in this document, read its body
+(the exact-path alternative for `## A` under `# Root` is `["Root","A"]`):
 
 ```json
-{"path":"note.md","targetType":"heading","target":["Root","A"]}
+{"path":"note.md","targetType":"heading","target":"A"}
 ```
 
 Independently, for an existing `status` property, read its typed value:
@@ -669,12 +683,92 @@ Related guides: `write`, `read`, `paths`. Related tools: `vault_read`,
 `vault_patch`, `vault_append`, `vault_write`.
 <!-- /obsidian-help -->
 
+<!-- obsidian-help:vault_insert_heading -->
+## vault_insert_heading — Insert a heading subtree at a structured position
+
+Add a section and its descendants to an existing text file without calculating Markdown heading
+depth. Supply `path`, exact `parent`, `place`, `title`, `body`, and exactly one
+current `ifMatch` or `ifMatchGuard` from a read or map. A missing file is an
+error. This operation does not change `vault_patch` or its relative levels.
+
+`parent` is a full map path array; `null` or `[]` selects the document root.
+Copy duplicate disambiguators unchanged. Parent/anchor strings and unique-label
+shorthand are not accepted. `place` is `"first"`, `"last"`, `{ "before": [...] }`
+or `{ "after": [...] }`; an anchor must be an exact direct child of `parent`.
+First/last mean among child sections, after the parent's direct introductory
+body. Before/after includes the anchor's entire subtree.
+
+The server writes the new heading at the parent's actual source level plus
+one, or H1 at root. `title` is a nonempty single-line label without surrounding
+whitespace; it must parse back to the same label (a closing ` ###` suffix, for
+example, cannot be preserved as a literal label). `body` is required and may
+be empty. Body headings are **relative to the new heading**: `# Child` becomes
+its child, `## Grandchild` its grandchild. A body heading's final level is the
+new heading's level plus its input level; relative gaps are retained, and any
+result beyond H6 is rejected. The new title and its entire subtree are written
+in one mutation with one version precondition.
+
+Only real heading markers identified by the existing parser are re-levelled.
+ATX headings retain their label, indentation, closing hashes and line ending;
+single-line setext headings (`=` is relative H1, `-` is relative H2) become ATX.
+Multiline setext labels, or labels that cannot round-trip in ATX, are rejected
+instead of flattened or renamed. Other body bytes, including whitespace,
+code, HTML and blockquotes, remain literal; heading-looking text inside those
+blocks follows the same parser's boundaries. Body is section content, so a
+leading `---` is not interpreted as note frontmatter.
+
+The tool preserves the old source bytes and inserts separators using the
+document's newline style. Before publication it verifies the complete prepared
+subtree under the requested parent, with all existing heading levels, parents,
+body blocks and block-reference ownership preserved. It refuses placements
+where skipped levels would adopt existing siblings, or an open fence/HTML
+region would swallow the new heading or existing content. Safe placements in
+documents with skipped levels remain allowed. It does not repair malformed
+Markdown, render it, or promise a broader Markdown/Obsidian interpretation.
+
+Semantic failures include `vault_semantic.heading_depth_overflow` (new title
+or any descendant beyond H6), `duplicate_heading` (same-title direct siblings
+at the insertion parent or anywhere inside the new subtree), `invalid_heading_title`,
+`unsupported_heading` and `unsafe_heading_insertion`; these short names have
+the same `vault_semantic.` prefix. Missing parents and non-child anchors return
+`vault_semantic.TargetNotFoundError`. Inspect the map/source, then choose a
+different title, position or explicit source edit. Rejected requests do not
+write. Existing unrelated duplicate siblings remain addressable by their map
+keys; a new duplicate sibling is never silently created. Repeated labels in
+different branches of the new subtree are allowed.
+
+Input JSON is bounded to 4 MiB. The shared mutation store checks the exact-byte
+precondition, serializes writes per path and publishes atomically; it does not
+retry, rebase or lock out external writers. Stale tokens return
+`vault_mutation.version_conflict`; reread and reconcile. The receipt contains
+`message`, `path`, `version`, `versionGuard`, `beforeSizeBytes`, `sizeBytes`,
+`created: false` and any shared publication warning. It does not return the
+new body. See guide `write` for guard strength and filesystem limits.
+
+Given `# Root` with direct children `## A` and `## B`, insert a subtree between
+them. The resulting levels are `## Inserted`, `### Details`, `#### Notes`:
+
+```json
+{"path":"note.md","parent":["Root"],"place":{"before":["Root","B"]},"title":"Inserted","body":"New section body.\n\n# Details\nChild body.\n\n## Notes\nNested body.","ifMatchGuard":"<current versionGuard>"}
+```
+
+Independently, append a new top-level section after all root sections:
+
+```json
+{"path":"note.md","parent":null,"place":"last","title":"Appendix","body":"","ifMatch":"<current version>"}
+```
+
+Related guides: `patch`, `write`, `read`. Related tools:
+`vault_get_document_map`, `vault_read`, `vault_patch`, `vault_replace_text`.
+<!-- /obsidian-help -->
+
 <!-- obsidian-help:vault_patch -->
 ## vault_patch — Edit one heading, block or frontmatter property
 
 Apply one structural instruction to an existing text file. Obtain exact target
 addresses and the current full-file version with `vault_get_document_map`;
-read the relevant text when the edit requires it. Use `vault_replace_text` for
+read the relevant text when the edit requires it. Use `vault_insert_heading`
+to add a section and its subtree with server-calculated depth, and `vault_replace_text` for
 one unique literal source slice, or `vault_append` for literal file-end text.
 
 Required fields are `path`, `targetType`, `target`, `operation` and exactly one

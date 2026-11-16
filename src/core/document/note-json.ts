@@ -5,7 +5,7 @@ import { extractDocumentTags } from "../tag/extract-document-tags.js";
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
 export class VaultSemanticError extends Error {
-  constructor(readonly code: string, message: string) {
+  constructor(readonly code: string, message: string, readonly details?: Readonly<Record<string, JsonValue>>) {
     super(message);
     this.name = "VaultSemanticError";
   }

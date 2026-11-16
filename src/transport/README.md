@@ -53,11 +53,11 @@ heading/block reads use textField: "result" with the unchanged semantic reader
 text. Empty bodies retain the second block. All frontmatter target values keep
 single-block typed JSON. Binary metadata becomes a leading JSON text block while
 native image/resource/resource_link blocks are retained. Both profiles expose
-14 tools in a full composition, sharing names for ten tools and all operation
+15 tools in a full composition, sharing names for eleven tools and all operation
 semantics. The standard profile's output contracts remain unchanged.
 The standard stdio entry keeps the default profile. The existing enableTextRead
 option remains compatible: it adds vault_read_text to the standard profile only,
-giving 15 tools with the legacy single-block JSON reading contract, and does not
+giving 16 tools with the legacy single-block JSON reading contract, and does not
 duplicate it in the text profile.
 
 Options belong to each MCP server instance. A remote host can use fixed options

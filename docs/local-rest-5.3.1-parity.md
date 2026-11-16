@@ -14,8 +14,9 @@ Primary sources at that immutable commit:
 
 ## Public tool table
 
-This table covers eleven text/discovery/mutation tools: five read tools and six
-mutations through the shared store, including the `vault_replace_text` extension.
+This table covers twelve text/discovery/mutation tools: five read tools and seven
+mutations through the shared store, including the `vault_replace_text` and
+`vault_insert_heading` extensions.
 An embedded read-only composition
 can omit the store. No metadata policy module or external staging setup is required.
 The additional `obsidian_help` tool serves static README topics only; it is a
@@ -23,7 +24,7 @@ server documentation extension with no Vault access, outside this parity table.
 The `vault_read_binary` extension is documented in the README and
 [deployment integration guide](binary-read-integration.md); `reference_query`
 has its own [bounded reference contract](reference-query.md). Stock stdio exposes
-14 tools including these extensions and `obsidian_help`.
+15 tools including these extensions and `obsidian_help`.
 
 | Tool | Pinned Local REST contract | Filesystem implementation / deliberate boundary |
 | --- | --- | --- |
@@ -34,6 +35,7 @@ has its own [bounded reference contract](reference-query.md). Stock stdio expose
 | `vault_append` | `path`, text `content`; creates missing file; existing content receives LF first unless it ends in LF | Implemented through the shared commit layer, including the existing-empty-file LF case. Existing files require `ifMatch` or `ifMatchGuard`; no transparent retries. |
 | `vault_patch` | One generic instruction with operation, scope, target and one payload carrier | Generic preparation plus shared atomic commit, required `ifMatch` or `ifMatchGuard`, no retries. Frontmatter operation table below is covered by fixtures. Never a specialized metadata tool. |
 | `vault_replace_text` | No pinned counterpart; independent server extension | `path`, `oldText`, `newText` and exactly one of `ifMatch` or `ifMatchGuard`. Whole-file literal, case-sensitive replacement of a unique nonempty old string in an existing text file; shared atomic commit and text limits, no parser or automatic retry. |
+| `vault_insert_heading` | No pinned counterpart; independent server extension | Exact parent/placement plus title and relative-heading body; server re-levels a subtree, checks that existing structure is unchanged, and uses the shared versioned atomic commit. See the tool manual for rejected boundary cases. |
 | `search_query` | JsonLogic evaluated against each Markdown NoteJson; retains the truthy result | Pinned engine, with filesystem-supported fields and safety limits. Core array of `{filename,result,version,versionGuard}`; MCP `{results:[...]}` avoids protocol-dependent root-array wrapping. |
 | `tag_list` | `{tags:[{name,count}]}`; names omit `#`, nested parents included | Same shape; shares parsed properties with NoteJson. Existing conservative inline lexer, deterministic case folding and per-file counts remain filesystem approximations of the Desktop cache. |
 | `vault_move` | `path`, `destination`, optional `allowOverwrite` (false); `{message:"OK",oldPath,newPath}`; Desktop link/history updates | Same names, normalization, filename-preserving directory suffix, parent creation, overwrite flag and result. Optional source `ifMatch` or `ifMatchGuard`. Filesystem move only; no link/history updates and no refusal based on backlinks. Same-filesystem only; details below. |
@@ -72,9 +74,12 @@ extension does not establish a malformed-YAML recovery workflow.
 
 `targetType` and `target` are paired; `scope` requires a target. Heading targets
 are arrays of texts along the containment path. Like upstream, a JSON-encoded
-array string is accepted for clients that stringify the argument; a bare
-heading string is rejected. Block and property targets are strings. Default
-scope is `content`. Duplicate map keys must be copied without reconstruction.
+string-array is accepted for clients that stringify the argument. As a server
+extension, other heading strings name an exact raw label unique across the
+document; ambiguity returns candidate full paths instead of picking a match.
+Array paths, including one-element paths and root `[]`, remain exact. Patch
+targets do not inherit the shorthand. Block and property targets are strings.
+Default scope is `content`. Duplicate map keys must be copied without reconstruction.
 
 | Target | `content` | `marker` | `markerAndContent` |
 | --- | --- | --- | --- |

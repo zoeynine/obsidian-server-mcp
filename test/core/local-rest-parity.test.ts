@@ -57,7 +57,8 @@ test("read and map use pinned duplicate heading/block addresses and all three sc
   assert.deepEqual(note.frontmatter, {status: "done", tags: ["one", "two"]});
   assert.equal(note.stat.size, Buffer.byteLength(source));
   assert.equal("backlinks" in note, false);
-  await assert.rejects(readVaultNote(f.reader, "note.md", {targetType: "heading", target: "Log"}), /array/u);
+  await assert.rejects(readVaultNote(f.reader, "note.md", {targetType: "heading", target: "Log"}),
+    error => error instanceof VaultSemanticError && error.code === "ambiguous_heading");
   await assert.rejects(readVaultNote(f.reader, "missing.md", {scope: "content"}), VaultSemanticError);
 });
 
