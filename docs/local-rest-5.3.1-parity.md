@@ -222,9 +222,12 @@ publication retains the original note. Success retains Local REST's
 and `created`, plus any warnings. `beforeSizeBytes` measures the original file;
 `sizeBytes` measures the saved file. Both are UTF-8 byte counts. Missing and
 empty files both have `beforeSizeBytes: 0`; `created` distinguishes them.
-Exact replacement also returns `replacementCount: 1`. These fields do not
-verify Markdown structure or editing intent; there are no diffs, heading lists,
-target echoes or note bodies in the receipt. If a new note was published but its
+Exact replacement also returns `replacementCount: 1`. Heading insertion adds
+`headingPath` and `headingLevel` from the verified resulting document model,
+identifying the new section's canonical address and actual depth in the returned
+version. Callers can check that placement against their intent. Other mutation
+receipts do not report structural placement; no receipt includes a full map,
+diff or note body. If a new note was published but its
 extra hidden hard-link name could not be removed, return success with
 `temporary_cleanup_failed`; do not misreport an unsaved append and invite retry.
 

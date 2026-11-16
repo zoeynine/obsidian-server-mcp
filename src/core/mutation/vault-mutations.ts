@@ -9,7 +9,7 @@ import { readVaultDocument, VaultDocumentNotFoundError, DEFAULT_MAX_VAULT_DOCUME
 import { assertTextContent, assertTextPath } from "../file/text-policy.js";
 import { VaultPathSandbox, type VaultRelativePath } from "../path/vault-path.js";
 import { MAX_PATCH_INPUT_BYTES, prepareVaultPatch } from "../patch/prepare-vault-patch.js";
-import { MAX_HEADING_INSERT_INPUT_BYTES, prepareHeadingInsertion } from "../patch/prepare-heading-insertion.js";
+import { MAX_HEADING_INSERT_INPUT_BYTES, prepareHeadingInsertion, type PreparedHeadingInsertion } from "../patch/prepare-heading-insertion.js";
 import { assertVersionMatch, assertVersionPrecondition, computeContentVersion, getVersionGuard, parseVersionPrecondition,
   type ContentVersion, type VersionGuard, type VersionPrecondition, type VersionPreconditionInput } from "../version/content-version.js";
 import { nativeMutationIO, type MutationIO } from "./mutation-io.js";
@@ -38,6 +38,10 @@ export interface VaultMutationResult {
 }
 export interface VaultTextReplacementResult extends VaultMutationResult {
   readonly replacementCount: 1;
+}
+export interface VaultHeadingInsertionResult extends VaultMutationResult {
+  readonly headingPath: readonly string[];
+  readonly headingLevel: number;
 }
 interface Snapshot { readonly document: VaultDocumentReadResult; readonly stats: BigIntStats }
 
@@ -115,7 +119,7 @@ export class VaultMutationStore {
     }));
     return { ...result, replacementCount: 1 };
   }
-  async insertHeading(inputPath: string, instruction: unknown): Promise<VaultMutationResult> {
+  async insertHeading(inputPath: string, instruction: unknown): Promise<VaultHeadingInsertionResult> {
     requireJson(instruction);
     // Capture structured placement and the precondition before the path lock.
     const serialized = JSON.stringify(instruction);
@@ -126,10 +130,14 @@ export class VaultMutationStore {
     const precondition = captured && typeof captured === "object"
       ? parseVersionPrecondition(captured as VersionPreconditionInput) : undefined;
     if (!precondition) throw new VaultMutationError("if_match_required", "vault_insert_heading requires ifMatch or ifMatchGuard", { path: inputPath });
-    return this.#mutate(inputPath, precondition, true, previous => {
-      const prepared = prepareHeadingInsertion(previous!, captured);
+    let prepared!: PreparedHeadingInsertion;
+    const result = await this.#mutate(inputPath, precondition, true, previous => {
+      prepared = prepareHeadingInsertion(previous!, captured);
       return { content: prepared.document, warnings: prepared.warnings };
     });
+    // The callback verified this location before staging; report it only once
+    // the same prepared bytes have passed the shared publication checks.
+    return { ...result, headingPath: prepared.headingPath, headingLevel: prepared.headingLevel };
   }
   #validateText(inputPath: string, content: string): void {
     this.#sandbox.parse(inputPath);

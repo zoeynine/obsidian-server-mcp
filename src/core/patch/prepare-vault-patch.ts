@@ -37,7 +37,13 @@ export function prepareVaultPatch(document: VaultDocumentReadResult, input: unkn
   assertTextPath(document.path);
   assertTextContent(document.path, document.content);
   const parsed = InstructionInputSchema.safeParse(normalized);
-  if (!parsed.success) throw new VaultSemanticError("invalid_instruction", "Instruction does not match the operation, scope and payload contract");
+  if (!parsed.success) {
+    const headingTargetIssue = engineInput["targetType"] === "heading" &&
+      parsed.error.issues.some(issue => issue.path[0] === "target");
+    throw new VaultSemanticError("invalid_instruction", headingTargetIssue
+      ? 'Heading target must be an exact full path array, e.g. ["Root","B"]. Copy exact keys from a document map; null or [] selects the document root. JSON-encoded path arrays are accepted. Unique label string shorthand is available only for reads.'
+      : "Instruction does not match the operation, scope and payload contract");
+  }
   const { ifMatch: _ifMatch, ...fields } = parsed.data;
   const instruction = fields as InstructionInput;
   const source = withoutBom(document.content);

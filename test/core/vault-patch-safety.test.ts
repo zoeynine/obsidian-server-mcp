@@ -80,6 +80,42 @@ test("leaf, within, rename and move edits keep their existing heading behavior",
   assert.throws(() => prepare("# A\nintro\n\nChild\n-----\nkeep\n", replace), semantic("subtree_confirmation_required"));
 });
 
+test("unique heading label strings explain exact patch addressing while array and encoded addresses stay compatible", () => {
+  const snapshot = document(section);
+  const input = { targetType: "heading", operation: "append", content: "added body", ifMatchGuard: snapshot.versionGuard };
+  assert.throws(() => prepareVaultPatch(snapshot, { ...input, target: "B" }), (error: unknown) => {
+    assert.ok(error instanceof VaultSemanticError);
+    assert.equal(error.code, "invalid_instruction");
+    assert.match(error.message, /exact full path array/u);
+    assert.match(error.message, /\["Root","B"\]/u);
+    assert.match(error.message, /exact keys from a document map/u);
+    assert.match(error.message, /null or \[\]/u);
+    assert.match(error.message, /shorthand.*only for reads/u);
+    return true;
+  });
+  const exact = prepareVaultPatch(snapshot, { ...input, target: ["A", "B"] });
+  assert.ok(exact.document.includes("keep B\n\nadded body\n"));
+  assert.deepEqual(prepareVaultPatch(snapshot, { ...input, target: '["A","B"]' }), exact);
+  const root = prepareVaultPatch(snapshot, { ...input, target: null });
+  for (const target of [[], "[]", "null"]) {
+    assert.deepEqual(prepareVaultPatch(snapshot, { ...input, target }), root);
+  }
+});
+
+test("valid heading targets retain the existing scope and payload error message", () => {
+  for (const input of [
+    { targetType: "heading", target: ["A", "B"], operation: "append", scope: "parent", content: "added body" },
+    { targetType: "heading", target: ["A", "B"], operation: "append", value: "wrong carrier" },
+  ]) {
+    assert.throws(() => prepare(section, input), (error: unknown) => {
+      assert.ok(error instanceof VaultSemanticError);
+      assert.equal(error.code, "invalid_instruction");
+      assert.equal(error.message, "Instruction does not match the operation, scope and payload contract");
+      return true;
+    });
+  }
+});
+
 test("subtree confirmation is typed, narrowly scoped and never bypasses version preconditions", () => {
   for (const allowSubtreeReplacement of ["true", 1, null]) {
     assert.throws(() => prepare(section, { ...replace, allowSubtreeReplacement }), semantic("invalid_instruction"));

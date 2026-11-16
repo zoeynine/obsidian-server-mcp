@@ -338,7 +338,7 @@ test("text-profile help refers to the four available text tools while keeping st
   for (const name of textNames) assert.match(textSections.join("\n"), new RegExp(`\\b${name}\\b`, "u"));
 });
 
-test("missing-heading errors keep their codes and direct recovery to each profile's document-map tool", async t => {
+test("missing-heading errors offer read shorthand without changing patch recovery or profile tool names", async t => {
   const f = await fixture(t);
   for (const [standardName, textName, args] of [
     ["vault_read", "vault_read_text", { path: notePath, targetType: "heading", target: ["不存在"] }],
@@ -352,6 +352,13 @@ test("missing-heading errors keep their codes and direct recovery to each profil
     assert.equal(original.error.code, "vault_semantic.TargetNotFoundError");
     assert.match(original.error.message, /\bvault_get_document_map\b/u);
     assert.doesNotMatch(original.error.message, /\bvault_get_document_map_text\b/u);
+    if (standardName === "vault_read") {
+      assert.match(original.error.message, /raw heading label.*unique.*string target/u);
+      assert.doesNotMatch(original.error.message, /\bwithin\b/u);
+    } else {
+      assert.doesNotMatch(original.error.message, /string target/u);
+      assert.match(original.error.message, /\bwithin\b/u);
+    }
     assert.deepEqual(adjusted, { error: { ...original.error,
       message: original.error.message.replace(/\bvault_get_document_map\b/gu, "vault_get_document_map_text") } });
     assert.match(adjusted.error.message, /\bvault_get_document_map_text\b/u);

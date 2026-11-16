@@ -90,10 +90,12 @@ export { extractDocumentTags } from "./tag/extract-document-tags.js";
 export { readVaultNote, type ReadVaultNoteOptions, type VaultNoteReadResult } from "./document/read-vault-note.js";
 export { toNoteJson, VaultSemanticError, type NoteJson, type JsonValue } from "./document/note-json.js";
 export { prepareVaultPatch, type VaultPatchInstruction } from "./patch/prepare-vault-patch.js";
-export { prepareHeadingInsertion, type VaultHeadingInsertion, type HeadingInsertionPlace } from "./patch/prepare-heading-insertion.js";
+export { prepareHeadingInsertion, type VaultHeadingInsertion, type HeadingInsertionPlace,
+  type PreparedHeadingInsertion } from "./patch/prepare-heading-insertion.js";
 export { VaultTextError, assertTextContent, assertTextPath } from "./file/text-policy.js";
 export { VaultMutationStore, VaultMutationError, type VaultMutationOptions,
-  type VaultMutationResult, type VaultTextReplacementResult, type VaultMutationErrorCode } from "./mutation/vault-mutations.js";
+  type VaultMutationResult, type VaultTextReplacementResult, type VaultHeadingInsertionResult,
+  type VaultMutationErrorCode } from "./mutation/vault-mutations.js";
 export { nativeMutationIO, type MutationIO } from "./mutation/mutation-io.js";
 export { type VaultMoveOptions, type VaultMoveResult, type VaultDeleteOptions, type VaultDeleteResult } from "./mutation/file-operations.js";
 

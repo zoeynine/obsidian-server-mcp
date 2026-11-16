@@ -16,9 +16,13 @@ export type VaultHeadingInsertion = VersionPreconditionInput & {
   readonly title: string;
   readonly body: string;
 };
+export interface PreparedHeadingInsertion extends PatchResult {
+  readonly headingPath: readonly string[];
+  readonly headingLevel: number;
+}
 
 /** Prepare one new section; the store pins the same bytes through publication. */
-export function prepareHeadingInsertion(document: VaultDocumentReadResult, input: unknown): PatchResult {
+export function prepareHeadingInsertion(document: VaultDocumentReadResult, input: unknown): PreparedHeadingInsertion {
   requireJson(input);
   if (Buffer.byteLength(JSON.stringify(input), "utf8") > MAX_HEADING_INSERT_INPUT_BYTES) {
     throw new VaultSemanticError("patch_limit", "Heading insertion input exceeds 4 MiB");
@@ -71,10 +75,10 @@ export function prepareHeadingInsertion(document: VaultDocumentReadResult, input
   const prefix = blankLineGap(source.slice(0, at), newline);
   const inserted = prefix + fragment;
   const next = source.slice(0, at) + inserted + source.slice(at);
-  verifyInsertion(model, buildVaultMarkdownModel(next), subtree, parent, at, inserted.length, at + prefix.length);
+  const location = verifyInsertion(model, buildVaultMarkdownModel(next), subtree, parent, at, inserted.length, at + prefix.length);
   const result = (source === document.content ? "" : "\uFEFF") + next;
   assertTextContent(document.path, result);
-  return { document: result, warnings: [] };
+  return { document: result, warnings: [], ...location };
 }
 
 /** Re-level only parser-owned heading markers; ordinary body bytes stay literal. */
@@ -160,7 +164,7 @@ function blankLineGap(text: string, newline: string): string {
 
 /** Reject lexical absorption and reparenting before any filesystem staging. */
 function verifyInsertion(before: DocumentModel, after: DocumentModel, subtree: DocumentModel, parent: SectionNode,
-  at: number, length: number, markerAt: number): void {
+  at: number, length: number, markerAt: number): Pick<PreparedHeadingInsertion, "headingPath" | "headingLevel"> {
   const unsafe = (): never => { throw new VaultSemanticError("unsafe_heading_insertion",
     "Insertion would change existing structure or the prepared subtree. Check skipped levels and open fence/HTML boundaries; choose another position or edit the source explicitly."); };
   const oldSections = sections(before.root), nextSections = sections(after.root);
@@ -205,4 +209,7 @@ function verifyInsertion(before: DocumentModel, after: DocumentModel, subtree: D
         actual.children.length !== expected.children.length || !actual.marker || !insertedRange(expected.marker!, actual.marker) ||
         !bodyMatches(expected, actual, insertedRange)) unsafe();
   }
+  const insertedRoot = byMarker.get(markerAt);
+  if (!insertedRoot || !insertedRoot.heading) return unsafe();
+  return { headingPath: createHeadingAddressResolver(after).pathOf(insertedRoot), headingLevel: insertedRoot.heading.level };
 }

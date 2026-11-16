@@ -2,7 +2,7 @@ import * as assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import test, { type TestContext } from "node:test";
-import { buildModel, projectMap, TargetNotFoundError } from "markdown-patch";
+import { buildModel, headingTreePaths, projectMap, TargetNotFoundError } from "markdown-patch";
 import { VaultSemanticError, withoutBom } from "../../src/core/document/note-json.js";
 import type { VaultDocumentReadResult } from "../../src/core/file/read-vault-document.js";
 import { nativeMutationIO, type MutationIO } from "../../src/core/mutation/mutation-io.js";
@@ -26,6 +26,13 @@ function insert(source: string, input: Record<string, unknown>) {
 
 function headings(source: string) {
   return JSON.parse(JSON.stringify(projectMap(buildModel(withoutBom(source))).headings)) as Record<string, Record<string, unknown>>;
+}
+
+function insertedPath(source: string): string[] {
+  const candidates = headingTreePaths(projectMap(buildModel(withoutBom(source))).headings)
+    .filter(target => target.at(-1) === "Inserted");
+  assert.equal(candidates.length, 1);
+  return candidates[0]!;
 }
 
 const semantic = (code: string) => (error: unknown) => error instanceof VaultSemanticError && error.code === code;
@@ -52,7 +59,7 @@ test("structured heading placement selects direct sibling positions and root wit
     { place: { after: ["Root", "A"] }, expected: ["A", "Inserted", "B"] },
   ];
   for (const { place, expected } of cases) {
-    const { document: next, warnings } = insert(source, { ...child, place });
+    const { document: next, warnings, headingPath, headingLevel } = insert(source, { ...child, place });
     assert.deepEqual(Object.keys(headings(next)["Root"]!), expected, JSON.stringify(place));
     assert.deepEqual(headings(next)["Root"]!["A"], { "A child": {} });
     assert.ok(next.startsWith("# Root\nintro ^intro\n\n"));
@@ -60,36 +67,53 @@ test("structured heading placement selects direct sibling positions and root wit
     assert.ok(next.includes("## Inserted\n"));
     assert.ok(next.endsWith("# Outside\nstay\n"));
     assert.deepEqual(warnings, []);
+    assert.deepEqual(headingPath, ["Root", "Inserted"]);
+    assert.equal(headingLevel, 2);
   }
   for (const { parent, place, expected } of [
     { parent: [], place: "first", expected: ["Inserted", "Root", "Outside"] },
     { parent: null, place: "last", expected: ["Root", "Outside", "Inserted"] },
   ]) {
-    const next = insert(source, { ...child, parent, place, body: "" }).document;
+    const { document: next, headingPath, headingLevel } = insert(source, { ...child, parent, place, body: "" });
     assert.deepEqual(Object.keys(headings(next)), expected);
     assert.match(next, /^# Inserted\r?$/mu);
+    assert.deepEqual(headingPath, ["Inserted"]);
+    assert.equal(headingLevel, 1);
   }
 });
 
 test("insertion uses the actual parent level and preserves exact duplicate and numeric map addresses", () => {
   const skipped = "# Root\n### Deep\nkeep body\n# Outside\nstay\n";
-  const next = insert(skipped, { ...child, parent: ["Root", "Deep"] }).document;
+  const skippedResult = insert(skipped, { ...child, parent: ["Root", "Deep"] });
+  const next = skippedResult.document;
   assert.match(next, /^#### Inserted$/mu);
   assert.deepEqual(headings(next), { Root: { Deep: { Inserted: {} } }, Outside: {} });
+  assert.deepEqual(skippedResult.headingPath, insertedPath(next));
+  assert.equal(skippedResult.headingLevel, 4);
 
   const repeated = "# Root\n## Group\nfirst parent\n### First\nkeep first\n## Group\nsecond parent\n### Second\nkeep second\n# Outside\nstay\n";
   const groups = Object.keys(headings(repeated)["Root"]!);
   assert.equal(groups.length, 2);
   assert.notEqual(groups[0], groups[1]);
-  const duplicate = insert(repeated, { ...child, parent: ["Root", groups[1]!] }).document;
+  const duplicateResult = insert(repeated, { ...child, parent: ["Root", groups[1]!] });
+  const duplicate = duplicateResult.document;
   assert.deepEqual(headings(duplicate)["Root"]![groups[0]!], { First: {} });
   assert.deepEqual(headings(duplicate)["Root"]![groups[1]!], { Second: {}, Inserted: {} });
   assert.ok(duplicate.startsWith(repeated.slice(0, repeated.indexOf("second parent"))));
+  assert.deepEqual(duplicateResult.headingPath, insertedPath(duplicate));
+  assert.equal(duplicateResult.headingLevel, 3);
 
   const numeric = "# Root\n## 10\nten\n## 2\ntwo\n# Outside\nstay\n";
-  const numbered = insert(numeric, { ...child, parent: ["Root", "2"] }).document;
+  const numericResult = insert(numeric, { ...child, parent: ["Root", "2"] });
+  const numbered = numericResult.document;
   assert.deepEqual(headings(numbered)["Root"]!["10"], {});
   assert.deepEqual(headings(numbered)["Root"]!["2"], { Inserted: {} });
+  assert.deepEqual(numericResult.headingPath, insertedPath(numbered));
+  assert.equal(numericResult.headingLevel, 3);
+  const emptyParent = insert("# \nbody\n", { ...child, parent: [""] });
+  assert.deepEqual(emptyParent.headingPath, insertedPath(emptyParent.document));
+  assert.deepEqual(emptyParent.headingPath, ["", "Inserted"]);
+  assert.equal(emptyParent.headingLevel, 2);
 });
 
 test("empty documents, frontmatter-only documents and missing final line endings keep their existing bytes", () => {
@@ -268,6 +292,8 @@ test("guarded insertion preserves BOM, CRLF and unrelated bytes through the atom
   assert.equal(result.sizeBytes, Buffer.byteLength(saved));
   assert.equal(result.version, computeContentVersion(saved));
   assert.equal(result.versionGuard, getVersionGuard(result.version));
+  assert.deepEqual(result.headingPath, insertedPath(saved));
+  assert.equal(result.headingLevel, 2);
   assert.deepEqual(events, ["write", "sync", "publish"]);
   assert.deepEqual(await readdir(f.vault), ["note.md"]);
 });

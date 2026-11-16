@@ -96,12 +96,19 @@ export interface VaultMcpServerOptions {
   readonly toolProfile?: "standard" | "text";
 }
 
-function semanticError(error: unknown, targetType?: unknown, textProfile = false): CallToolResult | undefined {
+function semanticError(error: unknown, toolName: string, targetType?: unknown, textProfile = false): CallToolResult | undefined {
   if (!(error instanceof VaultTextError || error instanceof VaultSemanticError || error instanceof EngineError)) return undefined;
   const code = error instanceof EngineError ? error.name : error.code;
-  const message = error instanceof TargetNotFoundError && targetType === "heading"
-    ? `Heading target or body block not found. Use the full heading path from the top level, e.g. ["Guide","Setup"], copying exact keys from ${textProfile ? VAULT_GET_DOCUMENT_MAP_TEXT_TOOL_NAME : VAULT_GET_DOCUMENT_MAP_TOOL_NAME}. If within is set, also check its body-block index.`
-    : error instanceof EngineError ? "Markdown operation failed: " + error.name : error.message;
+  const mapToolName = textProfile ? VAULT_GET_DOCUMENT_MAP_TEXT_TOOL_NAME : VAULT_GET_DOCUMENT_MAP_TOOL_NAME;
+  let message = error instanceof EngineError ? "Markdown operation failed: " + error.name : error.message;
+  if (error instanceof TargetNotFoundError && toolName === VAULT_INSERT_HEADING_TOOL_NAME) {
+    message = `Heading insertion parent or placement anchor not found. Use exact full paths from ${mapToolName}. A before/after anchor must be an existing direct child of parent; deeper descendants and headings under another parent are not valid anchors. Use null or [] for the document root.`;
+  } else if (error instanceof TargetNotFoundError && targetType === "heading") {
+    const readTool = toolName === VAULT_READ_TOOL_NAME || toolName === VAULT_READ_TEXT_TOOL_NAME;
+    message = `Heading target${readTool ? "" : " or body block"} not found. Use the full heading path from the top level, e.g. ["Guide","Setup"], copying exact keys from ${mapToolName}. ${readTool
+      ? 'For a raw heading label that is unique in the document, you can instead pass a string target, e.g. "Setup". String labels match exactly and case-sensitively; #anchor and file#anchor syntax is not resolved. Arrays remain exact full paths.'
+      : "If within is set, also check its body-block index."}`;
+  }
   const payload = { error: { code: "vault_semantic." + code, message,
     ...(error instanceof VaultSemanticError && error.details !== undefined ? { details: error.details } : {}) } };
   return { content: [{ type: "text", text: JSON.stringify(payload) }], isError: true };
@@ -135,7 +142,7 @@ export function createVaultMcpServer(dependencies: VaultMcpServerDependencies, o
           }
           return { content: [], structuredContent: result as CallToolResult["structuredContent"] };
         } catch (error) {
-          return semanticError(error, (args as { targetType?: unknown }).targetType, textProfile) ?? mapError(error, args as z.infer<z.ZodObject<I>>);
+          return semanticError(error, name, (args as { targetType?: unknown }).targetType, textProfile) ?? mapError(error, args as z.infer<z.ZodObject<I>>);
         }
       });
   }
@@ -226,16 +233,19 @@ export function createVaultMcpServer(dependencies: VaultMcpServerDependencies, o
       (error, args) => mapVaultMutationToolError(error, args.path), { destructive: true, idempotent: false });
     const headingAddress = z.array(z.string()).nullable();
     const siblingAddress = z.array(z.string()).min(1);
-    register(VAULT_INSERT_HEADING_TOOL_NAME, "Insert a heading subtree under an exact parent at first/last or before/after a direct child. Server sets its level; body # is its child, ## its grandchild. Only true heading markers are re-levelled. Rejects H6 overflow, duplicate siblings and changes to existing structure. Requires ifMatch or ifMatchGuard; no retry.",
-      z.object({ path: z.string(), parent: headingAddress.describe("Exact full map path; null or [] is the document root."),
+    register(VAULT_INSERT_HEADING_TOOL_NAME, "Insert a heading subtree under an exact parent at first/last or before/after a direct child. Server sets its level; body # is its child, ## its grandchild. Only true heading markers are re-levelled. Rejects H6 overflow, duplicate siblings and changes to existing structure. Returns canonical headingPath and actual headingLevel with the saved version. Requires ifMatch or ifMatchGuard; no retry.",
+      z.object({ path: z.string(), parent: headingAddress.describe("Exact full map path of the parent heading; null or [] inserts a top-level H1 at document root."),
         place: z.union([z.enum(["first", "last"]), z.object({ before: siblingAddress }).strict(), z.object({ after: siblingAddress }).strict()]),
         title: z.string().min(1).max(MAX_VAULT_DOCUMENT_BYTES), body: z.string().max(MAX_VAULT_DOCUMENT_BYTES),
         ...mutationPreconditions }).strict().refine(hasMutationPrecondition, { message: "Requires ifMatch or ifMatchGuard" }),
-      mutationOutput, ({ path, ...instruction }) => mutations.insertHeading(path, defined(instruction)),
+      mutationOutput.extend({ headingPath: z.array(z.string()).min(1), headingLevel: z.number().int().min(1).max(6) }),
+      ({ path, ...instruction }) => mutations.insertHeading(path, defined(instruction)),
       (error, args) => mapVaultMutationToolError(error, args.path), { destructive: false, idempotent: false });
     register(VAULT_PATCH_TOOL_NAME, "Patch a heading/block/property with ifMatch or ifMatchGuard (copy versionGuard) from a read/map. Copy map keys unchanged. Heading content without within: # is one level below the target for content (default), or the target's actual parent for markerAndContent prepend/append. No automatic retry.",
       z.object({ path: z.string(), targetType: z.enum(["heading", "block", "frontmatter"]),
-        target: z.union([headingAddress, z.string()]), within: z.number().int().optional(),
+        target: z.union([headingAddress, z.string()])
+          .describe("Heading: exact full path array or null for root; JSON-encoded paths supported. Unique-label shorthand is read-only. Block: ID without ^; frontmatter: key."),
+        within: z.number().int().optional(),
         operation: z.enum(["replace", "prepend", "append", "delete"]),
         scope: z.enum(["content", "marker", "markerAndContent", "parent"]).optional(),
         content: z.string().max(MAX_VAULT_DOCUMENT_BYTES).optional(),

@@ -132,12 +132,18 @@ test("ambiguous heading strings return exact recoverable duplicate paths without
     }
     const missing = await endpoint.client.callTool({ name: readName(profile),
       arguments: { path: note, targetType: "heading", target: "Missing" } });
-    assert.equal(readToolError(missing).code, "vault_semantic.TargetNotFoundError");
+    const missingError = readToolError(missing);
+    assert.equal(missingError.code, "vault_semantic.TargetNotFoundError");
+    assert.match(missingError.message, /case-sensitively/u);
+    assert.match(missingError.message, /#anchor and file#anchor syntax is not resolved/u);
     const patch = await endpoint.client.callTool({ name: "vault_patch", arguments: {
       path: note, targetType: "heading", target: "Same", operation: "replace", scope: "marker", content: "Renamed",
       ifMatch: computeContentVersion(source),
     } });
-    assert.equal(readToolError(patch).code, "vault_semantic.invalid_instruction");
+    const patchError = readToolError(patch);
+    assert.equal(patchError.code, "vault_semantic.invalid_instruction");
+    assert.match(patchError.message, /exact full path array/u);
+    assert.match(patchError.message, /shorthand is available only for reads/u);
     assert.equal(await readFile(path.join(f.vault, note), "utf8"), source);
   }
 });
@@ -156,6 +162,20 @@ test("structured insertion registers only with mutations and returns versioned r
     assert.equal(tool.annotations?.idempotentHint, false);
     assert.equal(tool.inputSchema["additionalProperties"], false);
     assert.equal(Object.hasOwn(tool, "outputSchema"), profile !== "text");
+    if (profile !== "text") {
+      const output = tool.outputSchema!;
+      const properties = output["properties"] as Record<string, Record<string, unknown>>;
+      const required = output["required"];
+      assert.ok(Array.isArray(required));
+      assert.ok(required.includes("headingPath"));
+      assert.ok(required.includes("headingLevel"));
+      assert.equal(properties["headingPath"]!["type"], "array");
+      assert.equal(properties["headingPath"]!["minItems"], 1);
+      assert.deepEqual(properties["headingPath"]!["items"], { type: "string" });
+      assert.equal(properties["headingLevel"]!["type"], "integer");
+      assert.equal(properties["headingLevel"]!["minimum"], 1);
+      assert.equal(properties["headingLevel"]!["maximum"], 6);
+    }
     if (schema === undefined) schema = tool.inputSchema;
     else assert.deepEqual(tool.inputSchema, schema);
     await writeFile(path.join(f.vault, note), source);
@@ -176,6 +196,13 @@ test("structured insertion registers only with mutations and returns versioned r
     assert.equal(receipt["version"], computeContentVersion(saved));
     assert.equal(receipt["versionGuard"], getVersionGuard(computeContentVersion(saved)));
     assert.equal(receipt["created"], false);
+    assert.deepEqual(receipt["headingPath"], ["Root", "Parent", "新增 🌱"]);
+    assert.equal(receipt["headingLevel"], 4);
+    const located = payload(await endpoint.client.callTool({ name: readName(profile), arguments: {
+      path: note, targetType: "heading", target: receipt["headingPath"], scope: "marker",
+    } }), endpoint, true);
+    assert.equal(located["result"], "新增 🌱");
+    assert.equal(located["version"], receipt["version"]);
     const stale = await endpoint.client.callTool({ name: "vault_insert_heading", arguments: { ...args, title: "Another" } });
     assert.equal(readToolError(stale).code, "vault_mutation.version_conflict");
     assert.equal(await readFile(path.join(f.vault, note), "utf8"), saved);
@@ -205,6 +232,10 @@ test("structured insertion validates strict inputs and exposes safe failure code
       assert.equal(await readFile(path.join(f.vault, note), "utf8"), source);
     }
     const refusals = [
+      { source, instruction: { parent: ["Missing"] }, code: "TargetNotFoundError" },
+      { source, instruction: { place: { before: ["Root", "Missing"] } }, code: "TargetNotFoundError" },
+      { source: "# Root\n## A\n### A\nnested body\n## B\nkeep\n",
+        instruction: { place: { before: ["Root", "A", "A"] } }, code: "TargetNotFoundError" },
       { source, instruction: { title: "Existing" }, code: "duplicate_heading" },
       { source, instruction: { body: "# 2\none\n# 2\ntwo" }, code: "duplicate_heading" },
       { source, instruction: { body: "two\nlines\n====\nbody" }, code: "unsupported_heading" },
@@ -217,8 +248,15 @@ test("structured insertion validates strict inputs and exposes safe failure code
       const result = await endpoint.client.callTool({ name: "vault_insert_heading", arguments: {
         ...base, ...refusal.instruction, ifMatch: computeContentVersion(refusal.source),
       } });
-      assert.equal(readToolError(result).code, "vault_semantic." + refusal.code);
-      assert.equal(await readFile(path.join(f.vault, note), "utf8"), refusal.source);
+      const error = readToolError(result);
+      assert.equal(error.code, "vault_semantic." + refusal.code);
+      if (refusal.code === "TargetNotFoundError") {
+        assert.match(error.message, /exact full paths/u);
+        assert.match(error.message, /direct child/u);
+        assert.ok(error.message.includes("from " + mapName(profile) + "."));
+        assert.doesNotMatch(error.message, /within|raw heading label|string target|shorthand/u);
+      }
+      assert.deepEqual(await readFile(path.join(f.vault, note)), Buffer.from(refusal.source));
     }
   }
 });
@@ -242,6 +280,8 @@ test("published insertion examples preserve their parent and placement intent in
         arguments: { ...example, ...precondition } }), endpoint);
       const saved = await readFile(path.join(f.vault, note), "utf8");
       assert.equal(receipt["version"], computeContentVersion(saved));
+      assert.deepEqual(receipt["headingPath"], index === 0 ? ["Root", "Inserted"] : ["Appendix"]);
+      assert.equal(receipt["headingLevel"], index === 0 ? 2 : 1);
       const map = payload(await endpoint.client.callTool({ name: mapName(profile), arguments: { path: note } }), endpoint);
       assert.deepEqual(JSON.parse(JSON.stringify(map["headings"])), index === 0
         ? { Root: { A: {}, Inserted: { Details: { Notes: {} } }, B: {} } }

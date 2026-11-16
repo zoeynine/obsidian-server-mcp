@@ -15,6 +15,21 @@
   labels, and changes to existing section ownership. It uses the existing
   version preconditions and atomic mutation path. Full standard and text
   compositions now expose 15 tools, or 16 with legacy `enableTextRead`.
+- Heading insertion receipts include the new section's canonical `headingPath`
+  and actual `headingLevel` from the verified resulting document. They describe
+  the saved version and allow direct placement checks and exact follow-up reads
+  or patches. Integrations with strict insertion-result schemas must accept
+  both fields; other mutation receipts keep their existing shape.
+
+### Fixed
+
+- Missing-heading read errors explain unique-label string targets, exact
+  case-sensitive matching and unsupported anchor/link syntax. Invalid heading
+  patch targets now identify the exact-path requirement instead of suggesting
+  a scope/payload error. Insertion not-found errors describe exact parents and
+  direct-child placement anchors. Existing error codes remain unchanged.
+- Align document-map and patch help with read-only shorthand, and clarify that
+  insertion under a null/empty parent creates a top-level H1.
 
 ## 0.2.0 - 2026-10-24
 

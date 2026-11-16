@@ -359,8 +359,10 @@ publishing. Body headings are relative: `#` becomes a child of the new heading,
 `##` a grandchild. Only true heading markers are re-levelled; ordinary body text,
 including code and HTML, stays literal. Single-line setext headings become ATX;
 unrepresentable labels fail explicitly. H6 overflow, duplicate siblings and insertions that
-would absorb or reparent existing content fail without writing. See its tool
-topic for root placement, before/after anchors and boundary recovery.
+would absorb or reparent existing content fail without writing. Its success
+receipt returns the canonical `headingPath` and actual `headingLevel` in the
+saved version, so callers can check placement and reuse the exact address.
+See its tool topic for root placement, before/after anchors and boundary recovery.
 
 Heading content uses relative levels. In the default `content` scope, input
 `#` becomes a child of the selected heading. With `markerAndContent`
@@ -420,8 +422,10 @@ have either. Move/delete receipts, directory listings and tag counts gain no
 token. Both profiles use the same rules; text reads put the guard in metadata.
 
 Successful receipts report both saved tokens and before/after UTF-8 byte sizes.
-They establish that bytes were committed, not that the edit fulfilled its intent
-or preserved Markdown structure. Inspect content or a map when that matters.
+Heading insertion also returns its verified canonical `headingPath` and actual
+`headingLevel` in that saved version. Check this location against the intended
+parent; root insertion is H1. Other receipts do not report structural placement.
+Inspect content or a map when further intent or structure checks are needed.
 A saved-note cleanup warning means the write succeeded; do not append again.
 
 Ask for each tool's own topic for its contract and examples. Guide `patch`
@@ -489,10 +493,11 @@ on each deployment's operating system and filesystem.
 
 Stdio requires only `OBSIDIAN_VAULT_ROOT`; no staging-root or policy-module
 configuration is needed. Protocol output uses stdout; diagnostics use stderr.
-Write/append/patch/exact-replacement success is a compact `message: "OK"`
+Write/append/patch/exact-replacement/heading-insertion success is a compact `message: "OK"`
 receipt with path, exact-byte version, versionGuard, `beforeSizeBytes`, final `sizeBytes`,
 `created` and any warnings. Exact replacement adds `replacementCount: 1`;
-the note body is not echoed.
+heading insertion adds canonical `headingPath` and actual `headingLevel` for the
+saved version. The note body is not echoed.
 
 <!-- obsidian-help:files -->
 ## Moving and deleting files

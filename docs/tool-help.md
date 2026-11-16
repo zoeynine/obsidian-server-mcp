@@ -181,9 +181,12 @@ Related guides: `read`, `paths`. Related tools: `vault_get_document_map`,
 <!-- obsidian-help:vault_get_document_map -->
 ## vault_get_document_map — Discover structural addresses
 
-Read a text document's address map before a targeted read or patch. This finds
-heading paths, block IDs and frontmatter keys without returning the note body.
-Use `vault_read` when the text itself or an exact source slice is needed.
+Discover exact heading paths, block IDs and frontmatter keys without returning
+the note body. Use this map to resolve ambiguous labels or obtain exact paths
+for reads, patches and heading insertion. A known raw heading label that is
+unique in the document can be read directly with `vault_read` and a string
+`target`, without first requesting a map. Use `vault_read` when the text itself
+or an exact source slice is needed.
 
 `path` is required. Optional `maxBytes` limits the entire source, default
 4 MiB and hard maximum 64 MiB; it does not limit the size of a selected section.
@@ -191,8 +194,10 @@ Optional `maxHeadings` is an integer from 1 through 100,000, default 10,000.
 
 The result contains `path`, exact-byte `version`, `versionGuard`, a nested `headings` tree,
 ordered `blocks` IDs and `frontmatterFields`. It includes the parser's duplicate
-heading disambiguators and setext headings. Copy keys unchanged along the full
-ancestor path; do not reconstruct an address from visible heading labels.
+heading disambiguators and setext headings. For exact path addressing, copy
+keys unchanged along the full ancestor path; duplicate-heading map keys cannot
+be reconstructed from visible labels. Unique-label shorthand applies only to
+reads, not patch targets or insertion parents/anchors.
 For an edit based on this observation, copy `versionGuard` as `ifMatchGuard`
 or the full `version` as `ifMatch`, never both. See guide `write` for collision limits.
 Map addresses are tool addresses, not link-fragment spelling for
@@ -691,7 +696,9 @@ depth. Supply `path`, exact `parent`, `place`, `title`, `body`, and exactly one
 current `ifMatch` or `ifMatchGuard` from a read or map. A missing file is an
 error. This operation does not change `vault_patch` or its relative levels.
 
-`parent` is a full map path array; `null` or `[]` selects the document root.
+`parent` is a full map path array; `null` or `[]` selects the document root and
+creates a top-level H1. To insert under an existing document title such as
+`# Notes`, use its exact path, for example `["Notes"]`.
 Copy duplicate disambiguators unchanged. Parent/anchor strings and unique-label
 shorthand are not accepted. `place` is `"first"`, `"last"`, `{ "before": [...] }`
 or `{ "after": [...] }`; an anchor must be an exact direct child of `parent`.
@@ -742,8 +749,19 @@ precondition, serializes writes per path and publishes atomically; it does not
 retry, rebase or lock out external writers. Stale tokens return
 `vault_mutation.version_conflict`; reread and reconcile. The receipt contains
 `message`, `path`, `version`, `versionGuard`, `beforeSizeBytes`, `sizeBytes`,
-`created: false` and any shared publication warning. It does not return the
-new body. See guide `write` for guard strength and filesystem limits.
+`created: false` and any shared publication warning. Insertion additionally
+returns `headingPath`, the new heading's canonical exact full path array,
+and `headingLevel`, its actual stored level from 1 through 6. Both describe
+the saved `version` and come from the verified resulting document model.
+Inspect them to confirm placement, and reuse `headingPath` for a subsequent
+exact targeted read or patch. A root insertion returns `[title]` and level 1;
+insertion under `# Notes` returns `["Notes", title]` and level 2 when those
+labels have ordinary map keys. Duplicate ancestor keys remain canonical in
+the returned path. These fields are specific to `vault_insert_heading`; other
+mutation receipts are unchanged. The receipt does not return the new body.
+This extends the insertion success schema; integrations that validate an exact
+set of receipt fields must accept both new fields.
+See guide `write` for guard strength and filesystem limits.
 
 Given `# Root` with direct children `## A` and `## B`, insert a subtree between
 them. The resulting levels are `## Inserted`, `### Details`, `#### Notes`:
@@ -775,9 +793,10 @@ Required fields are `path`, `targetType`, `target`, `operation` and exactly one
 of full `ifMatch` or short `ifMatchGuard` copied from that read/map.
 `targetType` is `heading`, `block` or `frontmatter`. A heading target
 is its full path-array from the map, including duplicate disambiguators;
-`null` or `[]` selects the document root. A JSON-encoded array string is also
-accepted for clients that stringify it. A block target is a bare ID without
-`^`; a frontmatter target is a property name.
+`null` or `[]` selects the document root. A JSON-encoded path array or `"null"`
+root is also accepted for clients that stringify it. Unique-label string
+shorthand is available only for reads; patch targets do not accept it. A block
+target is a bare ID without `^`; a frontmatter target is a property name.
 
 `operation` is `replace`, `prepend`, `append` or `delete`. `scope` defaults to
 `content`. Supply exactly one appropriate payload: `content` for Markdown or
@@ -852,8 +871,9 @@ safeguards and atomic save apply. Success is a compact receipt containing
 `created: false` and optional warnings, without the body or diff.
 
 On a missing heading or body block, check the full exact map path and any
-`within` index. On `vault_semantic.invalid_instruction`, correct the
-scope/payload pairing; on a version conflict, reread and reconcile. No
+`within` index. On `vault_semantic.invalid_instruction`, follow the message to
+correct the heading target's address form or the operation/scope/payload
+combination; on a version conflict, reread and reconcile. No
 automatic retries occur. A successful temporary-cleanup warning means saved
 content remains saved. After a structural patch, inspect a fresh map for
 actual nesting or a whole-file read for stored `#` levels; targeted heading
